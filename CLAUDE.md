@@ -41,7 +41,7 @@ src/app/        App Routerのページ・レイアウト。manifest.ts・icon.sv
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/        ユーティリティ（utils.tsはshadcn/uiのcn）
 prisma/         schema.prisma。モデルは後続Issueで追加する
-scripts/        開発・運用スクリプト（dev.shは.env.localのPORTでdevサーバーを起動する）
+scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
 .github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト
 ```
 
@@ -59,8 +59,9 @@ pnpm build:ci
 `build:ci`は`DATABASE_URL`を要求するが接続はしない（CIはプレースホルダーを渡す）。
 挙動が変わる変更は自動テストに加えて実際の動作も確認し、結果をPull Requestへ記録する。
 
-画面確認は`pnpm dev`で行う。ポートは`.env.local`の`PORT`で決まり、Issueごとのworktreeでは
-`28000 + Issue番号`を使う。`.env.local`が無い場合は`pnpm env:init`で雛形から作る。
+画面確認は`pnpm dev`で行う。ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる。
+Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issue番号`）を渡すため、
+`.env.local`に書かなくてよい。`.env.local`自体が無い場合は`pnpm env:init`で雛形から作る。
 
 CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必須チェックであり、
 ワークフロー名`CI`は`claude-ci-fix.yml`と`claude-conflict-resolve.yml`が購読している。

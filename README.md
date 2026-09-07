@@ -26,7 +26,7 @@ Node.js 24、pnpm 10系（`package.json`の`packageManager`で固定）を使い
 ```bash
 pnpm install
 pnpm env:init   # .env.local.example から .env.local を作る
-pnpm dev        # .env.local の PORT（未設定なら3000）で開発サーバーを起動
+pnpm dev        # 環境変数PORT → .env.localのPORT → 3000 の順で決めたポートで起動
 ```
 
 DBを使う画面はまだありませんが、`prisma generate`をビルド前に実行するため
@@ -36,7 +36,7 @@ DBを使う画面はまだありませんが、`prisma generate`をビルド前�
 
 | コマンド | 内容 |
 | --- | --- |
-| `pnpm dev` | 開発サーバー（`scripts/dev.sh`が`.env.local`の`PORT`を読む） |
+| `pnpm dev` | 開発サーバー（ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる） |
 | `pnpm lint` | ESLint（`eslint-config-next`） |
 | `pnpm typecheck` | `next typegen && tsc --noEmit` |
 | `pnpm build:ci` | `prisma generate && next build` |
