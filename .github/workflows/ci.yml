@@ -49,7 +49,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # Node標準のテストランナーで src/**/*.test.ts を実行する（DBには接続しない）。
+      # 家庭の境界・許可メール・open redirect・開発用ログインの無効化を検証する
+      # （Node標準の `node --test`。DBにも外部サービスにも接続しない）。
       - name: Unit test
         run: pnpm test:unit
 

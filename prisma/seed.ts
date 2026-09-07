@@ -1,5 +1,9 @@
 /**
- * 開発用の初期データ。`pnpm db:seed`（= `prisma db seed`）で流す。
+ * 在庫のサンプルデータ。`pnpm db:seed`（= `prisma db seed`）で流す。
+ *
+ * 投入先は開発用ログインが入る家庭（`dev-household-own`）で、
+ * `pnpm db:seed:dev`（`scripts/seed-dev.mjs`）が作る家庭と同じもの。
+ * 順序に依存しないよう、無ければここでも作る。
  *
  * 何度流しても同じ状態になるように、IDを固定してupsertする。
  * 在庫数量は`StockLot.quantity`へ直接書かず、入出庫履歴から
@@ -13,7 +17,8 @@ import { Decimal, type UnitCode } from "../src/lib/inventory/units.ts";
 
 const prisma = new PrismaClient();
 
-const HOUSEHOLD_ID = "seed-household";
+// scripts/seed-dev.mjs が作る「開発用の家」と同じid。片方だけ変えないこと。
+const HOUSEHOLD_ID = "dev-household-own";
 
 /** seedが積む入出庫履歴。idとoccurredAtを固定してupsertできるようにする。 */
 interface SeedTransaction {
@@ -235,20 +240,18 @@ function toLedgerEntries(lot: SeedLot): LedgerEntry[] {
 async function main(): Promise<void> {
   await prisma.household.upsert({
     where: { id: HOUSEHOLD_ID },
-    update: { name: "サンプル家庭" },
-    create: { id: HOUSEHOLD_ID, name: "サンプル家庭" },
+    update: {},
+    create: { id: HOUSEHOLD_ID, name: "開発用の家" },
   });
 
-  await prisma.member.upsert({
-    where: { id: "seed-member-owner" },
-    update: { displayName: "自分", role: "OWNER" },
-    create: {
-      id: "seed-member-owner",
-      householdId: HOUSEHOLD_ID,
-      displayName: "自分",
-      role: "OWNER",
-    },
+  // 記録者はこの家庭に所属しているメンバーに限る（他家庭のメンバーは複合外部キーで弾かれる）。
+  // pnpm db:seed:dev を流していない場合は所属者がいないため、記録者なしの履歴にする。
+  const member = await prisma.householdMember.findFirst({
+    where: { householdId: HOUSEHOLD_ID },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
   });
+  const memberId = member?.id ?? null;
 
   for (const category of CATEGORIES) {
     const { id, ...rest } = category;
@@ -316,7 +319,7 @@ async function main(): Promise<void> {
       const fields = {
         stockLotId: lot.id,
         productId: lot.productId,
-        memberId: "seed-member-owner",
+        memberId,
         type: transaction.type,
         quantityDelta: new Decimal(transaction.quantityDelta),
         unit: lot.unit,

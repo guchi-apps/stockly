@@ -1,13 +1,15 @@
 import { PrismaClient } from "@prisma/client";
 
-// `next dev`はモジュールを再読み込みするため、都度newするとDB接続が積み上がって
-// MySQLのmax_connectionsを使い切る。開発時だけglobalThisに載せて使い回す。
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
+// 開発中はモジュールが再読み込みされるたびにPrismaClientが増え、DBの接続数を食い潰す。
+// globalThisへ退避して1つだけを使い回す。
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient();
+export const db =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  });
 
 if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+  globalForPrisma.prisma = db;
 }
