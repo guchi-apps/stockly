@@ -53,6 +53,8 @@ src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations�
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
+db-tests/       実DB（MySQL/MariaDB）に接続して複合外部キー等のDB制約を検証するテスト（#18）。
+                `pnpm test:unit`とは別に`pnpm test:db`で実行する
 scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
 .github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト、secrets-manifest.tsv
 ```
@@ -81,6 +83,18 @@ tsconfigの`allowImportingTsExtensions`はこのために有効にしている�
 DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため人が実行する）でDBとユーザーを作り、
 `pnpm db:migrate:dev` → `pnpm db:seed:dev`（開発用ユーザーと家庭）→ `pnpm db:seed`（在庫のサンプルデータ）
 の順に流す。`db:seed`は`db:seed:dev`が作る家庭（`dev-household-own`）へ在庫を入れる。
+
+**他家庭のデータを参照できないことを保証する複合外部キー（後述「データモデル」）は、`db-tests/`で
+実DBに接続して検証する（`pnpm test:db`。#18）。** `pnpm test:unit`とは別コマンドで、DBが無い
+環境では実行しない・できない。ローカルで動かす場合は`pnpm db:migrate:deploy` → `pnpm db:seed`の
+あとに`pnpm test:db`を実行する。`db-tests/**/*.test.ts`は`node --test`が.env.localを読まない
+ため、`db-tests/helpers.ts`が`dotenv`で明示的に読み込む。
+`.github/workflows/ci.yml`には`lint-and-build`とは別に`db-constraint-tests`ジョブがあり、
+MySQLのサービスコンテナに対して`prisma migrate deploy` → `prisma db seed` → `pnpm test:db`を
+実行する。**このジョブはbranch protectionの必須チェックには含めていない**（必須チェックは
+`lint-and-build`のみ）。**`claude-ci-fix.yml`・`claude-pr-repair.yml`の無人修復エージェントは
+実DBを持たないため、このジョブの失敗を`pnpm test:db`で確認しながら直すことはできない**
+（`verify-commands`にその旨を明記してある）。
 
 画面確認は`pnpm dev`で行う。ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる。
 Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issue番号`）を渡すため、
