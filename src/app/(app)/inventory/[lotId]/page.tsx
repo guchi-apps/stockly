@@ -7,6 +7,7 @@ import { ActionNotice, PageHeader, firstValue } from "@/components/inventory/chr
 import { ExpiryBadge, formatDate } from "@/components/inventory/expiry-badge";
 import { InventoryList } from "@/components/inventory/inventory-list";
 import { ReverseButton } from "@/components/inventory/record-form";
+import { SubmitButton } from "@/components/inventory/submit-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -158,21 +159,15 @@ export default async function StockLotPage({ params, searchParams }: PageProps<"
           </div>
 
           <div className="flex flex-1 flex-wrap gap-2">
-            <Button type="submit" name="type" value="PURCHASE" variant="outline" className="h-11 flex-1">
+            <SubmitButton name="type" value="PURCHASE" className="h-11 flex-1">
               補充
-            </Button>
-            <Button type="submit" name="type" value="CONSUME" variant="outline" className="h-11 flex-1">
+            </SubmitButton>
+            <SubmitButton name="type" value="CONSUME" className="h-11 flex-1">
               消費
-            </Button>
-            <Button
-              type="submit"
-              name="type"
-              value="DISPOSE"
-              variant="destructive"
-              className="h-11 flex-1"
-            >
+            </SubmitButton>
+            <SubmitButton name="type" value="DISPOSE" variant="destructive" className="h-11 flex-1">
               廃棄
-            </Button>
+            </SubmitButton>
           </div>
         </form>
 

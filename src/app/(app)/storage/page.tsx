@@ -10,8 +10,8 @@ import {
 } from "@/app/(app)/actions";
 import { ActionNotice, EmptyState, PageHeader, firstValue } from "@/components/inventory/chrome";
 import { StorageLocationForm } from "@/components/inventory/storage-location-form";
+import { SubmitButton } from "@/components/inventory/submit-button";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { requireInventoryContext } from "@/lib/inventory/context";
 import { listStorageLocations } from "@/lib/inventory/queries";
@@ -41,9 +41,9 @@ export default async function StoragePage({ searchParams }: PageProps<"/storage"
           description="冷蔵庫・冷凍庫・食品棚・防災バッグ・洗面所をまとめて作れます。あとから名前を変えたり足したりできます。"
           action={
             <form action={createDefaultStorageLocationsAction}>
-              <Button type="submit" size="lg" className="h-11">
+              <SubmitButton size="lg" variant="default" className="h-11" pendingLabel="作成中…">
                 よく使う保管場所を作る
-              </Button>
+              </SubmitButton>
             </form>
           }
         />
@@ -64,9 +64,9 @@ export default async function StoragePage({ searchParams }: PageProps<"/storage"
                     aria-label={`${location.name}の名前`}
                     className="h-10 max-w-56 text-base font-semibold"
                   />
-                  <Button type="submit" variant="ghost" size="sm" className="h-10">
+                  <SubmitButton variant="ghost" className="h-10" pendingLabel="保存中…">
                     名前を保存
-                  </Button>
+                  </SubmitButton>
                 </form>
 
                 <Badge variant="outline">{TEMPERATURE_LABELS[location.temperatureZone]}</Badge>
@@ -74,15 +74,14 @@ export default async function StoragePage({ searchParams }: PageProps<"/storage"
 
                 <form action={deleteStorageLocationAction}>
                   <input type="hidden" name="storageLocationId" value={location.id} />
-                  <Button
-                    type="submit"
+                  <SubmitButton
                     variant="ghost"
                     size="icon-lg"
                     aria-label={`${location.name}を削除`}
                     className="text-muted-foreground"
                   >
                     <Trash2 className="size-4" aria-hidden />
-                  </Button>
+                  </SubmitButton>
                 </form>
               </div>
 
@@ -93,14 +92,13 @@ export default async function StoragePage({ searchParams }: PageProps<"/storage"
                     <span className="text-muted-foreground inline-flex items-center gap-1 rounded-lg border border-dashed px-2.5 py-1 text-xs">
                       {position.name}
                       <span className="tabular-nums opacity-70">{position._count.stockLots}</span>
-                      <Button
-                        type="submit"
+                      <SubmitButton
                         variant="ghost"
                         size="icon-xs"
                         aria-label={`${position.name}を削除`}
                       >
                         ×
-                      </Button>
+                      </SubmitButton>
                     </span>
                   </form>
                 ))}
@@ -113,10 +111,10 @@ export default async function StoragePage({ searchParams }: PageProps<"/storage"
                     aria-label={`${location.name}に詳細位置を追加`}
                     className="h-9 w-40 text-sm"
                   />
-                  <Button type="submit" variant="outline" size="sm" className="h-9">
+                  <SubmitButton className="h-9">
                     <Plus className="size-3.5" aria-hidden />
                     追加
-                  </Button>
+                  </SubmitButton>
                 </form>
               </div>
             </li>

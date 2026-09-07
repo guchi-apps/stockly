@@ -24,6 +24,7 @@ import { config as loadEnv } from "dotenv";
 
 import { computeLotQuantity } from "../../src/lib/inventory/ledger.ts";
 import { Decimal, type UnitCode } from "../../src/lib/inventory/units.ts";
+import { ensureByName, ensurePositionByName } from "../seed-support.ts";
 
 type TransactionType = "PURCHASE" | "CONSUME" | "DISPOSE" | "ADJUST";
 
@@ -375,40 +376,6 @@ async function resetFixtureRows(): Promise<void> {
   });
 }
 
-/**
- * 名前で既存の行を探し、無ければ固定idで作る。
- *
- * カテゴリ・保管場所・商品は家庭内で名前が一意なので、「固定idでupsert」だけだと、
- * 同じ名前を別のidで持っている家庭で重複エラーになる。
- */
-async function ensureByName(
-  model: "category" | "storageLocation" | "product",
-  fixedId: string,
-  name: string,
-  fields: Record<string, unknown>,
-): Promise<string> {
-  const table = prisma[model] as {
-    findFirst: (args: unknown) => Promise<{ id: string } | null>;
-    update: (args: unknown) => Promise<{ id: string }>;
-    create: (args: unknown) => Promise<{ id: string }>;
-  };
-
-  const existing = await table.findFirst({
-    where: { householdId: HOUSEHOLD_ID, name },
-    select: { id: true },
-  });
-  if (existing) {
-    await table.update({ where: { id: existing.id }, data: fields });
-    return existing.id;
-  }
-
-  const created = await table.create({
-    data: { id: fixedId, householdId: HOUSEHOLD_ID, ...fields },
-    select: { id: true },
-  });
-  return created.id;
-}
-
 async function main(): Promise<void> {
   await prisma.household.upsert({
     where: { id: HOUSEHOLD_ID },
@@ -431,34 +398,34 @@ async function main(): Promise<void> {
   //   名前は家庭内で一意なので、idを固定してcreateすると重複で落ちる。）
   const categoryIds = new Map<string, string>();
   for (const { id, ...rest } of CATEGORIES) {
-    categoryIds.set(id, await ensureByName("category", id, rest.name, rest));
+    categoryIds.set(id, await ensureByName(prisma, HOUSEHOLD_ID, "category", id, rest.name, rest));
   }
 
   const locationIds = new Map<string, string>();
   const positionIds = new Map<string, string>();
   for (const { id, positions, ...rest } of LOCATIONS) {
-    const locationId = await ensureByName("storageLocation", id, rest.name, rest);
+    const locationId = await ensureByName(
+      prisma,
+      HOUSEHOLD_ID,
+      "storageLocation",
+      id,
+      rest.name,
+      rest,
+    );
     locationIds.set(id, locationId);
 
     for (const { id: positionId, ...positionRest } of positions) {
-      const existing = await prisma.storagePosition.findFirst({
-        where: { householdId: HOUSEHOLD_ID, storageLocationId: locationId, name: positionRest.name },
-        select: { id: true },
-      });
-      const resolved =
-        existing?.id ??
-        (
-          await prisma.storagePosition.create({
-            data: {
-              id: positionId,
-              householdId: HOUSEHOLD_ID,
-              storageLocationId: locationId,
-              ...positionRest,
-            },
-            select: { id: true },
-          })
-        ).id;
-      positionIds.set(positionId, resolved);
+      positionIds.set(
+        positionId,
+        await ensurePositionByName(
+          prisma,
+          HOUSEHOLD_ID,
+          locationId,
+          positionId,
+          positionRest.name,
+          positionRest,
+        ),
+      );
     }
   }
 
@@ -471,7 +438,7 @@ async function main(): Promise<void> {
       servingsPerUnit: servingsPerUnit ? new Decimal(servingsPerUnit) : null,
       usesPerUnit: usesPerUnit ? new Decimal(usesPerUnit) : null,
     };
-    productIds.set(id, await ensureByName("product", id, rest.name, fields));
+    productIds.set(id, await ensureByName(prisma, HOUSEHOLD_ID, "product", id, rest.name, fields));
   }
 
   for (const lot of LOTS) {

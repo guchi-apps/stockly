@@ -8,7 +8,7 @@
  * 数量は必ず`Decimal`で扱う。`number`は0.1+0.2が0.30000000000000004になり、
  * 0.4ロールのような小数の在庫がすぐ合わなくなる。
  */
-import { applyEntry, type LedgerEntry } from "./ledger.ts";
+import { applyEntry, isReversed, type LedgerEntry } from "./ledger.ts";
 import {
   Decimal,
   UNIT_DEFINITIONS,
@@ -398,13 +398,20 @@ function collect<T>(build: () => T): ParseResult<T> {
   }
 }
 
-/** 取り消せる履歴か。取消行そのものと、すでに取り消された行は対象外。 */
+/**
+ * 取り消せる履歴か。取消行そのものと、すでに取り消された行は対象外。
+ *
+ * 判定の実体は`ledger.ts`の`isReversed()`で、ここは画面が「取消ボタンを出すか」を
+ * 決めるための入口。**同じ判定をここで書き直さないこと**（片方だけ直すと、押せるのに
+ * サーバー側で拒否されるボタンが並ぶ）。実際に取り消すときは`buildReversal()`が
+ * 同じ規則でもう一度確かめる。
+ */
 export function canReverse(
   target: Pick<LedgerEntry, "id" | "type" | "reversesTransactionId">,
   entries: readonly Pick<LedgerEntry, "reversesTransactionId">[],
 ): boolean {
   if (target.type === "REVERSAL") return false;
-  return !entries.some((entry) => entry.reversesTransactionId === target.id);
+  return !isReversed(target as LedgerEntry, entries as LedgerEntry[]);
 }
 
 export { quantity };

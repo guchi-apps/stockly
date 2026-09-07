@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { recordTransactionAction, reverseTransactionAction } from "@/app/(app)/actions";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/inventory/submit-button";
 import { newOperationId } from "@/lib/inventory/service";
 import type { RecordableTransactionType } from "@/lib/inventory/operations";
 
@@ -11,6 +11,10 @@ import type { RecordableTransactionType } from "@/lib/inventory/operations";
  * **`operationId`はこのフォームを描くたびに1つ発行する。** 同じフォームを二重送信しても
  * IDは同じなので、2件目は`service.ts`側で「記録済み」として弾かれ、数量は二重に動かない。
  * 記録が済むと画面が再描画され、次の操作には新しいIDが割り当てられる。
+ *
+ * 「続けて2回消費する」のような**別々の操作**は、送信中にボタンを押せなくすることで
+ * 必ず再描画をはさむようにしている（`SubmitButton`）。そうしないと、2回目のタップが
+ * 同じ操作IDで送られ、意図した記録が黙って落ちる。
  */
 export function RecordButton({
   lotId,
@@ -36,9 +40,9 @@ export function RecordButton({
       <input type="hidden" name="type" value={type} />
       <input type="hidden" name="amount" value={amount} />
       <input type="hidden" name="redirectTo" value={redirectTo} />
-      <Button type="submit" variant={variant} size="sm" className={className}>
+      <SubmitButton variant={variant} className={className}>
         {children}
-      </Button>
+      </SubmitButton>
     </form>
   );
 }
@@ -58,9 +62,9 @@ export function ReverseButton({
       <input type="hidden" name="operationId" value={newOperationId()} />
       <input type="hidden" name="transactionId" value={transactionId} />
       <input type="hidden" name="redirectTo" value={redirectTo} />
-      <Button type="submit" variant="ghost" size="sm" className="text-muted-foreground h-8">
+      <SubmitButton variant="ghost" className="text-muted-foreground h-8" pendingLabel="…">
         {label}
-      </Button>
+      </SubmitButton>
     </form>
   );
 }
