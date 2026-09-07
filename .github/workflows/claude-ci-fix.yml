@@ -35,7 +35,7 @@ jobs:
       # 本ワークフローのworkflow_dispatch入力はここで明示的に渡す。
       issue-number: ${{ inputs.issue_number }}
       # プロンプトへそのまま埋め込まれるため、文末まで含めて1行で書く。
-      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ3つ。ビルド用の環境変数はこのステップに設定済みで、外部サービスへは接続しないため起動も不要）"
+      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm test:unit`（単体テスト）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ4つ。ビルド用の環境変数はこのステップに設定済みで、外部サービスへは接続しないため起動も不要）"
       # pnpm build:ciの実行に必要。.github/workflows/ci.ymlのenvと同じプレースホルダー値を使う
       # （実際の外部サービスには接続しない）。実シークレットはここに書かない
       # （secrets: inheritで別途渡る）。
