@@ -119,6 +119,10 @@ CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必
 `sumQuantities()`は換算できない組み合わせを黙って合算せず`UnitConversionError`を投げる。
 合算できないものも落とさず並べたい場面では`groupSummableQuantities()`を使う。
 
+**`Prisma.Decimal`の`isPositive()`は0でもtrueを返す**（decimal.jsは0の符号を+として持つため）。
+「0より大きい」を判定したいところでは`greaterThan(0)`を使う。`isPositive()`のままだと、
+数量が0になったロットが「まだ在庫がある」と判定される。
+
 ## 在庫の読み書き
 
 - **在庫を変える処理は`src/lib/inventory/service.ts`だけが行う。** 画面・Server Actionから
