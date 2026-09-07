@@ -98,6 +98,23 @@ rsvg-convert -w 512 -h 512 src/app/icon.svg -o public/icon-512.png
 rsvg-convert -w 180 -h 180 src/app/icon.svg -o src/app/apple-icon.png
 ```
 
+## 本番デプロイ
+
+`main`へのpushで`.github/workflows/deploy.yml`が動き、VPSへ配ります。実際の公開URLは
+`https://stockly.gucchii.com/`で、経路はApache（443） → `127.0.0.1:3116` → PM2プロセス`stockly`です。
+
+流れは、リリースタグの作成 → ビルド（`pnpm build:ci`） → 成果物をVPSへ転送 → `.env`の更新 →
+`pnpm install --prod` → `prisma migrate deploy` → PM2の再起動 → ヘルスチェック → Signalyへ通知、の順です。
+`develop`から`main`へのリリースPRは自動マージしない運用のため、公開は人がマージした時点で始まります。
+
+デプロイに要る値は`.github/secrets-manifest.tsv`が正で、1Passwordを人が管理する唯一の正、
+GitHub Secrets/VariablesをActions実行時の取得先とします。VPSへの接続情報・共有MariaDBの
+接続情報・Supabaseの公開値はorganizationの共通値を継承し、このリポジトリ固有の値は
+`TARGET_DIR`・`DB_NAME`・`ALLOWED_GOOGLE_EMAILS`の3つだけです。値を変えたときは
+issue-deckの画面（設定 → シークレットの同期）か`sync-secrets.yml`で同期します。
+
+待受ポート（3116）は1Passwordにもマニフェストにも置かず、`deploy.yml`に平文で持ちます。
+
 ## 開発運用
 
 - 日常開発は`develop`、本番相当は`main`

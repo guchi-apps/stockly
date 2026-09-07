@@ -56,6 +56,7 @@ prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixture
 db-tests/       実DB（MySQL/MariaDB）に接続して複合外部キー等のDB制約を検証するテスト（#18）。
                 `pnpm test:unit`とは別に`pnpm test:db`で実行する
 scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
+deploy/         PM2のecosystem.config.js。本番のプロセス名は`stockly`で待受は3116
 .github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト、secrets-manifest.tsv
 ```
 
@@ -108,6 +109,35 @@ CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必
 `verify-commands`も同じ内容へ直す。** あの文字列は無人修復エージェントへのプロンプトへそのまま
 埋め込まれ、コマンド名だけでなく本数まで書いてある。直し忘れると、新しいステップを実行しないまま
 「検証済み」としてpushされ、CIが落ち続ける。
+
+## 本番デプロイ
+
+`main`へのpushで`.github/workflows/deploy.yml`が動く。経路は
+Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`stockly`。
+
+- **待受ポート3116は`deploy.yml`に平文で持つ**（`guchi-apps/docs`の`standards/ports.md`。
+  1Passwordにもマニフェストにも入れない）。`deploy/ecosystem.config.js`の既定値も同じ番号に揃える。
+  PM2は再起動時に`--env production`を失うことがあるため、`env`と`env_production`の両方へ書く
+- **タグとGitHub Releaseを作るのは`deploy.yml`の`tag`ジョブだけ。** `version-tag-check.yml`は
+  main宛PRの時点で「`package.json`の`version`に対応するタグがまだ無いこと」を確かめており、
+  この2つは対になっている。片方だけ変えるとリリースが止まる
+- **`DATABASE_URL`は持たず、`DB_*`から`scripts/construct-database-url.sh`が組み立てる。**
+  パスワードをURLエンコードして埋め込むため、値を丸ごと持つとActionsのログでマスクが効かない
+  （このリポジトリはPUBLIC）。`prisma migrate deploy`だけはDDL権限のある`MIGRATE_DATABASE_URL`を使う
+- **VPS上の`.env`は`scripts/update-env-file.sh`が書いたキーだけを更新する。** 実行時に要る値は
+  `deploy.yml`の`update_env`へ必ず並べること。サーバー上で手で足した値は次のデプロイで
+  参照されないまま取り残される
+- デプロイに要る値の対応表は`.github/secrets-manifest.tsv`が正。VPS接続・共有MariaDB・Supabaseの
+  公開値はorganizationの共通値を`inherit`し、このリポジトリ固有は`TARGET_DIR`・`DB_NAME`・
+  `ALLOWED_GOOGLE_EMAILS`だけ。**`repo`なのにSOURCEが`-`の行を作らない**（同期が必ず失敗し、
+  値が空のままワークフローだけ通る）
+- **公開URLで別アプリの画面が出たら、まず証明書のCNを見る。** `*.gucchii.com`はワイルドカードで
+  VPSへ向いているため、vhostが無いホスト名でもTLSハンドシェイクまで成立し、Apacheが443番の
+  既定vhostを返す。DNSもプロセスも正常に見えるのに中身だけ違うので気付きにくい。
+  `echo | openssl s_client -connect stockly.gucchii.com:443 -servername stockly.gucchii.com 2>/dev/null | openssl x509 -noout -subject`
+  のCNが別ドメインなら、Stocklyのvhostがまだ無い（#26で実際にops-dashboardが表示されていた）
+- deployジョブの成功は公開できたことを保証しない。ヘルスチェックが叩くのはVPS内の
+  `127.0.0.1:3116`で、ApacheのVirtualHostが無くても通る。公開URLの疎通は後段の警告のみのステップで見る
 
 ## データモデル
 
