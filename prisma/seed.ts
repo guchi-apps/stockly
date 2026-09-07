@@ -13,6 +13,7 @@
 import { PrismaClient, type Prisma } from "@prisma/client";
 
 import { computeLotQuantity, type LedgerEntry } from "../src/lib/inventory/ledger.ts";
+import { ensureByName, ensurePositionByName } from "./seed-support.ts";
 import { Decimal, type UnitCode } from "../src/lib/inventory/units.ts";
 
 const prisma = new PrismaClient();
@@ -253,54 +254,65 @@ async function main(): Promise<void> {
   });
   const memberId = member?.id ?? null;
 
-  for (const category of CATEGORIES) {
-    const { id, ...rest } = category;
-    await prisma.category.upsert({
-      where: { id },
-      update: rest,
-      create: { id, householdId: HOUSEHOLD_ID, ...rest },
-    });
+  // カテゴリ・保管場所・商品は家庭内で名前が一意なので、固定idでのupsertではなく
+  // 名前で寄せる（`prisma/seed-support.ts`）。画面から同じ名前を作ったあとでも流せる。
+  const categoryIds = new Map<string, string>();
+  for (const { id, ...rest } of CATEGORIES) {
+    categoryIds.set(id, await ensureByName(prisma, HOUSEHOLD_ID, "category", id, rest.name, rest));
   }
 
-  for (const location of STORAGE_LOCATIONS) {
-    const { id, positions, ...rest } = location;
-    await prisma.storageLocation.upsert({
-      where: { id },
-      update: rest,
-      create: { id, householdId: HOUSEHOLD_ID, ...rest },
-    });
+  const locationIds = new Map<string, string>();
+  const positionIds = new Map<string, string>();
+  for (const { id, positions, ...rest } of STORAGE_LOCATIONS) {
+    const locationId = await ensureByName(
+      prisma,
+      HOUSEHOLD_ID,
+      "storageLocation",
+      id,
+      rest.name,
+      rest,
+    );
+    locationIds.set(id, locationId);
 
-    for (const position of positions) {
-      const { id: positionId, ...positionRest } = position;
-      await prisma.storagePosition.upsert({
-        where: { id: positionId },
-        update: positionRest,
-        create: {
-          id: positionId,
-          householdId: HOUSEHOLD_ID,
-          storageLocationId: id,
-          ...positionRest,
-        },
-      });
+    for (const { id: positionId, ...positionRest } of positions) {
+      positionIds.set(
+        positionId,
+        await ensurePositionByName(
+          prisma,
+          HOUSEHOLD_ID,
+          locationId,
+          positionId,
+          positionRest.name,
+          positionRest,
+        ),
+      );
     }
   }
 
+  const productIds = new Map<string, string>();
   for (const product of PRODUCTS) {
-    const { id, householdId, ...rest } = product;
-    await prisma.product.upsert({
-      where: { id: id as string },
-      update: rest,
-      create: { id, householdId, ...rest },
-    });
+    const { id, householdId, categoryId, ...rest } = product;
+    void householdId;
+    const fields = {
+      ...rest,
+      categoryId: categoryId ? (categoryIds.get(categoryId) ?? null) : null,
+    };
+    productIds.set(
+      id as string,
+      await ensureByName(prisma, HOUSEHOLD_ID, "product", id as string, rest.name, fields),
+    );
   }
 
   for (const lot of LOTS) {
     // 数量は履歴から組み立てる。ここでの再計算がそのまま集計値の正しさの担保になる。
     const quantity = computeLotQuantity(toLedgerEntries(lot), lot.unit).amount;
+    const productId = productIds.get(lot.productId) as string;
     const lotFields = {
-      productId: lot.productId,
-      storageLocationId: lot.storageLocationId,
-      storagePositionId: lot.storagePositionId ?? null,
+      productId,
+      storageLocationId: locationIds.get(lot.storageLocationId) as string,
+      storagePositionId: lot.storagePositionId
+        ? (positionIds.get(lot.storagePositionId) as string)
+        : null,
       unit: lot.unit,
       quantity,
       bestBeforeDate: lot.bestBeforeDate ? new Date(lot.bestBeforeDate) : null,
@@ -318,7 +330,7 @@ async function main(): Promise<void> {
     for (const transaction of lot.transactions) {
       const fields = {
         stockLotId: lot.id,
-        productId: lot.productId,
+        productId,
         memberId,
         type: transaction.type,
         quantityDelta: new Decimal(transaction.quantityDelta),
