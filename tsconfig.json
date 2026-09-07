@@ -10,6 +10,10 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
+    // `*.test.ts` は Node標準の `node --test` が、`prisma/seed.ts` は `prisma db seed` が、
+    // それぞれNode（型剥がし）でそのまま実行する。
+    // Nodeは拡張子付きの相対importしか解決しないため、`./access.ts` の形を許可する。
+    "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
