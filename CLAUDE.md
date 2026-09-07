@@ -44,13 +44,15 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 
 ```
 src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
+src/app/(app)/  在庫・履歴・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
 src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
-src/lib/inventory/ 在庫ドメインの純関数（units.tsは単位換算、ledger.tsは履歴からの数量計算）
+src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations）と、DBを触るservice・queries
+src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
-prisma/         schema.prisma・migrations・seed.ts（在庫のサンプルデータ）
+prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
 db-tests/       実DB（MySQL/MariaDB）に接続して複合外部キー等のDB制約を検証するテスト（#18）。
                 `pnpm test:unit`とは別に`pnpm test:db`で実行する
 scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
@@ -130,6 +132,31 @@ CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必
 `number`は小数の加算で誤差が出る。個数系の単位（個・パック・本…）は商品ごとの入数が分からないと互いに換算できないため、
 `sumQuantities()`は換算できない組み合わせを黙って合算せず`UnitConversionError`を投げる。
 合算できないものも落とさず並べたい場面では`groupSummableQuantities()`を使う。
+
+**`Prisma.Decimal`の`isPositive()`は0でもtrueを返す**（decimal.jsは0の符号を+として持つため）。
+「0より大きい」を判定したいところでは`greaterThan(0)`を使う。`isPositive()`のままだと、
+数量が0になったロットが「まだ在庫がある」と判定される。
+
+## 在庫の読み書き
+
+- **在庫を変える処理は`src/lib/inventory/service.ts`だけが行う。** 画面・Server Actionから
+  `db.stockLot.update()`のような書き込みをしない。読み取りも`queries.ts`を通す
+  （どちらも先頭で`scopeToHousehold()`を通り、そこで返った`householdId`だけをwhereに使う）
+- **二重送信の防止に専用の列は持たない。** 画面がフォームへ埋めた操作ID（`newOperationId()`で
+  1レンダーにつき1つ発行）を、そのまま`InventoryTransaction.id`に使う。2回目の送信は主キーの
+  重複になるので、`status: "duplicate"`として何も足さずに返す。**冪等キーの列を足したくなったら、
+  まずこの方式で足りない理由を確かめること**（`InventoryTransaction`はappend-onlyなので、
+  「同じ操作＝同じ履歴1件」がそのまま冪等性になる）
+- 同じロットへの記録が同時に走ると集計値だけがずれるため、数量を読む前に
+  `SELECT ... FOR UPDATE`でロット行をロックする（`service.ts`の`lockLot()`）
+- 競合の検出（`expectedUpdatedAt`）は**編集画面だけ**。消費・補充のような相対的な増減は、
+  他の人が先に記録していても意味が壊れないので使わない。使うと、家族が同時に触るたびに
+  やり直しを求めることになる
+- **取消で数量が負になることは許し、負のロットはACTIVEのまま一覧に残す。** 買ったぶんを消費した
+  あとでその購入を取り消せば負になるのが履歴として正しい。DEPLETEDにすると一覧から消え、
+  訂正する手段が無くなる
+- 画面の確認用データは`pnpm db:seed:fixture`（`prisma/fixtures/daily-inventory.ts`）。
+  流すたびに`fx-`で始まる在庫・履歴を作り直すので、画面で試した記録が残らない
 
 ## 認証と家庭の境界
 
