@@ -9,6 +9,10 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // src/lib/inventory/*.ts と prisma/seed.ts は `node --test` / `prisma db seed` から
+    // Node（型剥がし）で直接実行する。Nodeは拡張子を補完しないため import 先を
+    // `./units.ts` のように書く必要があり、それを型検査でも許可する。
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",

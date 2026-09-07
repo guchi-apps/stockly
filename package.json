@@ -10,11 +10,14 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
-    "test": "pnpm lint && pnpm typecheck",
+    "test": "pnpm lint && pnpm typecheck && pnpm test:unit",
+    "test:unit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.ts\"",
     "postinstall": "prisma generate",
     "env:init": "cp -n .env.local.example .env.local && echo '.env.local を編集してください（DATABASE_URL / Supabase）'",
+    "db:setup": "bash scripts/setup-db.sh",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
     "db:studio": "prisma studio"
   },
   "dependencies": {

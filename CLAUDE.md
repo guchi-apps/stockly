@@ -39,11 +39,29 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 ```
 src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
-src/lib/        ユーティリティ（utils.tsはshadcn/uiのcn）
-prisma/         schema.prisma。モデルは後続Issueで追加する
+src/lib/        ユーティリティ（utils.tsはshadcn/uiのcn、db.tsはPrismaClientのシングルトン）
+src/lib/inventory/ 在庫ドメインの純関数（units.tsは単位換算、ledger.tsは履歴からの数量計算）
+prisma/         schema.prisma・migrations・seed.ts
 scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
 .github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト
 ```
+
+## データモデル
+
+`prisma/schema.prisma`が在庫データの正本。次の3点が設計の前提で、崩すと在庫の履歴と取消が成立しない。
+
+- **在庫の実体は`StockLot`**。同一商品・同一期限・同一保管場所のかたまりを1件とし、期限や保管場所が違えば別ロットにする
+- **数量の増減は`InventoryTransaction`にappend-onlyで積む**。既存行のUPDATE・DELETEは行わず、取消は「符号を反転した`REVERSAL`行を足す」ことで表す。
+  この形にしてあるため、現在数量は`quantityDelta`の**単純合計**で復元でき、取消済みの行を除外する処理が要らない。
+  `StockLot.quantity`はその合計を保持する集計値で、正本は履歴のほう。ずれは`verifyLotQuantity()`で検出する
+- **他家庭のデータを参照できないことをDB制約で担保する**。家庭に属する全モデルは`householdId`と`@@unique([householdId, id])`を持ち、
+  子から親への参照は`[householdId, 親Id]`の複合外部キーにしてある。`householdId`が違う行はそもそも外部キーを満たせない。
+  新しいモデルを足すときもこの形に揃える（単一列の外部キーにすると、この保証だけが静かに消える）
+
+数量は必ず`Prisma.Decimal`と単位（`UnitCode`）の組で扱い、`src/lib/inventory/units.ts`の関数を通す。
+`number`は小数の加算で誤差が出る。個数系の単位（個・パック・本…）は商品ごとの入数が分からないと互いに換算できないため、
+`sumQuantities()`は換算できない組み合わせを黙って合算せず`UnitConversionError`を投げる。
+合算できないものも落とさず並べたい場面では`groupSummableQuantities()`を使う。
 
 ## 検証
 
@@ -52,12 +70,26 @@ scripts/        開発・運用スクリプト（dev.shはPORTを解決してdev
 ```bash
 pnpm lint
 pnpm typecheck
+pnpm test:unit
 pnpm build:ci
 ```
 
 `typecheck`は`next typegen && tsc --noEmit`、DBを使う`build:ci`は`prisma generate && next build`。
 `build:ci`は`DATABASE_URL`を要求するが接続はしない（CIはプレースホルダーを渡す）。
+`pnpm test`は上の4つのうちビルド以外をまとめて実行する。
 挙動が変わる変更は自動テストに加えて実際の動作も確認し、結果をPull Requestへ記録する。
+
+`test:unit`はNode標準のテストランナー（`node --test`）で`src/**/*.test.ts`を実行する。
+Node 24がTypeScriptを型剥がしでそのまま実行できるため、テストランナーもトランスパイラも依存に足していない。
+その代わり次の2点に注意する。
+
+- **型注釈以外のTS構文は使えない**（`enum`・`namespace`・パラメータプロパティなど）。テスト・`prisma/seed.ts`と、
+  そこから読まれる`src/lib/inventory/*`が対象
+- **Nodeは拡張子を補完しない**ため、これらのファイルからのimportは`./units.ts`のように拡張子を書く
+  （`tsconfig.json`の`allowImportingTsExtensions`で型検査側も許可済み。Next.jsのビルドもこの形を解決できる）
+
+DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため人が実行する）でローカルのDBとユーザーを作り、
+`pnpm db:migrate:dev` / `pnpm db:seed`で適用・投入する。
 
 画面確認は`pnpm dev`で行う。ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる。
 Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issue番号`）を渡すため、

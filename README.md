@@ -32,6 +32,15 @@ pnpm dev        # 環境変数PORT → .env.localのPORT → 3000 の順で決�
 DBを使う画面はまだありませんが、`prisma generate`をビルド前に実行するため
 `.env.local`の`DATABASE_URL`は形式が正しい値にしておいてください。
 
+ローカルDBを使う場合は、初回だけ次を実行します（`pnpm db:setup`は`sudo mysql`を使うため
+パスワードを聞かれます）。
+
+```bash
+pnpm db:setup          # .env.localのDATABASE_URLからDB・ユーザーを作る
+pnpm db:migrate:dev    # マイグレーションを適用
+pnpm db:seed           # 開発用の初期データを投入
+```
+
 ## コマンド
 
 | コマンド | 内容 |
@@ -39,12 +48,16 @@ DBを使う画面はまだありませんが、`prisma generate`をビルド前�
 | `pnpm dev` | 開発サーバー（ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる） |
 | `pnpm lint` | ESLint（`eslint-config-next`） |
 | `pnpm typecheck` | `next typegen && tsc --noEmit` |
+| `pnpm test:unit` | `node --test`で`src/**/*.test.ts`を実行（DBには接続しない） |
+| `pnpm test` | lint・型チェック・単体テストをまとめて実行 |
 | `pnpm build:ci` | `prisma generate && next build` |
 | `pnpm start` | ビルド済みアプリの起動 |
+| `pnpm db:setup` | `.env.local`の`DATABASE_URL`からローカルDB・ユーザーを作る（`sudo`が要る） |
 | `pnpm db:migrate:dev` / `pnpm db:migrate:deploy` | Prismaマイグレーション |
+| `pnpm db:seed` | 開発用の初期データ投入（`prisma/seed.ts`） |
 
 `develop`・`main`向けのPull Requestでは、CI（`.github/workflows/ci.yml`）が上の
-lint・型チェック・ビルドを実行します。
+lint・型チェック・単体テスト・ビルドを実行します。
 
 ## アプリアイコン
 

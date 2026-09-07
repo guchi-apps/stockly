@@ -49,6 +49,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Node標準のテストランナーで src/**/*.test.ts を実行する（DBには接続しない）。
+      - name: Unit test
+        run: pnpm test:unit
+
       - name: Build
         run: pnpm build:ci
         env:
