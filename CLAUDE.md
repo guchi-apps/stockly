@@ -38,11 +38,14 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 
 ```
 src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
+src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
-src/lib/        ユーティリティ（utils.tsはshadcn/uiのcn）
-prisma/         schema.prisma。モデルは後続Issueで追加する
+src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
+src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
+src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
+prisma/         schema.prismaとmigrations。在庫のモデルは後続Issueで追加する
 scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
-.github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト
+.github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト、secrets-manifest.tsv
 ```
 
 ## 検証
@@ -52,10 +55,14 @@ scripts/        開発・運用スクリプト（dev.shはPORTを解決してdev
 ```bash
 pnpm lint
 pnpm typecheck
+pnpm test:unit
 pnpm build:ci
 ```
 
 `typecheck`は`next typegen && tsc --noEmit`、DBを使う`build:ci`は`prisma generate && next build`。
+`test:unit`はNode標準の`node --test`で`src/**/*.test.ts`を実行する（テストランナーの依存は入れていない）。
+テストからの相対importは`./access.ts`のように拡張子を付ける（Nodeが拡張子付きしか解決しないため。
+tsconfigの`allowImportingTsExtensions`はこのために有効にしている）。DB・外部サービスには接続しない。
 `build:ci`は`DATABASE_URL`を要求するが接続はしない（CIはプレースホルダーを渡す）。
 挙動が変わる変更は自動テストに加えて実際の動作も確認し、結果をPull Requestへ記録する。
 
@@ -66,6 +73,21 @@ Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issu
 CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必須チェックであり、
 ワークフロー名`CI`は`claude-ci-fix.yml`と`claude-conflict-resolve.yml`が購読している。
 どちらも変更すると無言で止まるため、変える場合は参照側もあわせて直す。
+
+## 認証と家庭の境界
+
+- **セッションの検証は`src/proxy.ts`（→`src/lib/supabase/middleware.ts`）が1リクエストにつき1回だけ行う。**
+  画面・APIでは`supabase.auth.getUser()`を呼ばず、`src/lib/auth/current-user.ts`の`getCurrentUser()`
+  等を使う。`getUser()`は毎回Supabaseへ往復するため、呼び直すと待ち時間が倍になる
+- 検証済みのユーザーIDは`x-stockly-supabase-user-id`ヘッダーで後段へ渡す。proxyが必ず上書きか削除を
+  するので詐称は届かないが、**proxyのmatcherから外したパスではこの前提が崩れる**
+- **利用可否は`ALLOWED_GOOGLE_EMAILS`で判定する**（`src/lib/auth/allowed-emails.ts`）。共有のSupabase
+  プロジェクトを他アプリと使っているため、認証できることと利用してよいことは別。未設定時は全員拒否
+- 在庫を扱うクエリは`src/lib/household/access.ts`の`scopeToHousehold()`を通す。画面ごとに
+  `where: { householdId }`を手で書かない（1か所の書き忘れがそのまま越境になる）
+- ログイン後の戻り先は`resolveInternalPath()`で正規化する（open redirectの防止）
+- 開発用ログイン（`POST /api/dev/login`）は`NODE_ENV=production`とシークレット未設定の**二重**で
+  無効化する。片方だけ緩めない
 
 ## shadcn/uiのコンポーネント追加
 
