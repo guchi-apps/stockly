@@ -74,6 +74,11 @@ CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必
 ワークフロー名`CI`は`claude-ci-fix.yml`と`claude-conflict-resolve.yml`が購読している。
 どちらも変更すると無言で止まるため、変える場合は参照側もあわせて直す。
 
+**`lint-and-build`の検証ステップを増やしたら、`claude-ci-fix.yml`と`claude-pr-repair.yml`の
+`verify-commands`も同じ内容へ直す。** あの文字列は無人修復エージェントへのプロンプトへそのまま
+埋め込まれ、コマンド名だけでなく本数まで書いてある。直し忘れると、新しいステップを実行しないまま
+「検証済み」としてpushされ、CIが落ち続ける。
+
 ## 認証と家庭の境界
 
 - **セッションの検証は`src/proxy.ts`（→`src/lib/supabase/middleware.ts`）が1リクエストにつき1回だけ行う。**
