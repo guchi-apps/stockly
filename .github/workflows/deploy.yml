@@ -144,6 +144,10 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
 
+      # **`prisma.config.ts`は入れない。** あれは`dotenv`（devDependencies）をimportするが、
+      # VPS側は`pnpm install --prod`なので入らず、`postinstall`の`prisma generate`が
+      # モジュール解決に失敗する。`schema`・`migrations.path`は既定と同じ値なので、
+      # 無くても`prisma generate`と`migrate deploy`は同じ場所を見る。
       - name: Create archive
         run: |
           tar -czf deploy.tar.gz \
