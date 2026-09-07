@@ -1,0 +1,12 @@
+// Stocklyの在庫データはこのスキーマを正本とする。
+// 基盤の初期化Issue（#1）ではDBへの接続とクライアント生成の器だけを用意し、
+// モデル（在庫・カテゴリ・保管場所など）は後続のデータモデルIssueで追加する。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
