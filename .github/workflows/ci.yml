@@ -49,6 +49,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # 家庭の境界・許可メール・open redirect・開発用ログインの無効化を検証する
+      # （Node標準の `node --test`。DBにも外部サービスにも接続しない）。
+      - name: Unit test
+        run: pnpm test:unit
+
       - name: Build
         run: pnpm build:ci
         env:

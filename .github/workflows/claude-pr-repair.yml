@@ -37,7 +37,7 @@ jobs:
       # 本ワークフローのworkflow_dispatch入力はここで明示的に渡す。
       pr-number: ${{ inputs.pr_number }}
       mode: ${{ inputs.mode }}
-      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ3つ）"
+      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm test:unit`（単体テスト）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ4つ）"
       build-env: |
         DATABASE_URL=mysql://placeholder:placeholder@127.0.0.1:3306/app_stockly
         NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co

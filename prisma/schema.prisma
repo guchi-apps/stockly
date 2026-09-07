@@ -1,6 +1,8 @@
 // Stocklyの在庫データはこのスキーマを正本とする。
-// 基盤の初期化Issue（#1）ではDBへの接続とクライアント生成の器だけを用意し、
-// モデル（在庫・カテゴリ・保管場所など）は後続のデータモデルIssueで追加する。
+// 在庫のモデル（品目・カテゴリ・保管場所など）は後続のデータモデルIssueで追加する。
+//
+// ここにあるのは利用者と家庭の境界だけ（#2）。在庫を持つモデルは必ず`householdId`を持ち、
+// `src/lib/household/access.ts`の関数を通してのみ読み書きする。
 
 generator client {
   provider = "prisma-client-js"
@@ -9,4 +11,63 @@ generator client {
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
+}
+
+/// Stocklyの利用者。Supabase Authのユーザーと1対1で対応する。
+///
+/// Supabaseは他アプリと共有のプロジェクトのため、「Supabaseで認証できること」は
+/// 「Stocklyを使ってよいこと」を意味しない。利用可否は`ALLOWED_GOOGLE_EMAILS`で判定し、
+/// 許可されたときだけこの行を作る（src/app/auth/callback/route.ts）。
+model User {
+  id String @id @default(cuid())
+
+  /// Supabase Authのユーザーid（`auth.users.id`のUUID）。認証との唯一の接点。
+  supabaseUserId String  @unique
+  email          String?
+  name           String?
+  imageUrl       String? @db.Text
+
+  memberships HouseholdMember[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// 在庫を共有する単位。家族で1つの在庫を見るための器で、在庫データの所有者はここ。
+model Household {
+  id   String @id @default(cuid())
+  name String
+
+  members HouseholdMember[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// 利用者が家庭に所属していることを表す。**在庫への到達可否はこの行の有無だけで決まる。**
+///
+/// 利用者は複数の家庭に所属しうる（自宅と実家など）ため、UserとHouseholdの多対多にしている。
+model HouseholdMember {
+  id String @id @default(cuid())
+
+  householdId String
+  userId      String
+  role        HouseholdRole @default(MEMBER)
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// 同じ家庭に同じ利用者が二重に所属しないことをDBで保証する。
+  @@unique([householdId, userId])
+  @@index([userId])
+}
+
+/// 家庭内での権限。今回は所属の有無だけで境界を判定し、ここでの差はまだ付けていない。
+/// 招待・共有を扱うIssueで、OWNERだけができる操作（家庭の削除・メンバーの除名）を足す。
+enum HouseholdRole {
+  OWNER
+  MEMBER
 }
