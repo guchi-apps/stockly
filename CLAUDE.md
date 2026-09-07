@@ -70,6 +70,9 @@ pnpm build:ci
 `test:unit`はNode標準の`node --test`で`src/**/*.test.ts`を実行する（テストランナーの依存は入れていない）。
 テストからの相対importは`./access.ts`のように拡張子を付ける（Nodeが拡張子付きしか解決しないため。
 tsconfigの`allowImportingTsExtensions`はこのために有効にしている）。DB・外部サービスには接続しない。
+**Nodeの実行はstrip-onlyモードなので、型注釈以外のTS構文（`enum`・`namespace`・パラメータプロパティ）は
+`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`で落ちる。** テスト・`prisma/seed.ts`と、そこから読まれるモジュールでは
+`enum`を使わず、union型か`as const`オブジェクトで書く。
 `build:ci`は`DATABASE_URL`を要求するが接続はしない（CIはプレースホルダーを渡す）。
 挙動が変わる変更は自動テストに加えて実際の動作も確認し、結果をPull Requestへ記録する。
 
