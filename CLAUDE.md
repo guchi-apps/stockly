@@ -67,6 +67,13 @@ CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必
 ワークフロー名`CI`は`claude-ci-fix.yml`と`claude-conflict-resolve.yml`が購読している。
 どちらも変更すると無言で止まるため、変える場合は参照側もあわせて直す。
 
+## shadcn/uiのコンポーネント追加
+
+`pnpm dlx shadcn@latest add <component>` で追加し、`src/components/ui/`のファイルは手で書いたものと混ぜない。
+初期化は `shadcn@latest init -y -b radix -p nova` で行った（`components.json`の`style`は`radix-nova`）。
+`-b`はコンポーネントライブラリ（`base` / `radix` / `aria`）で、baseColorではない。
+`src/lib/utils.ts`の`cn`は`cn`パッケージの再エクスポートで、clsx + tailwind-mergeは入っていない。
+
 ## AGENTS.mdのNext.js管理ブロック
 
 `AGENTS.md`の`<!-- BEGIN:nextjs-agent-rules -->`〜`<!-- END:nextjs-agent-rules -->`は
