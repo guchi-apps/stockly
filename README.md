@@ -30,6 +30,7 @@ pnpm db:setup      # .env.local の DATABASE_URL からローカルのDB・ユ�
 pnpm db:migrate:dev
 pnpm db:seed:dev   # 開発用ログインのダミー利用者・家庭を投入する
 pnpm db:seed       # 在庫のサンプルデータを投入する（db:seed:dev の家庭へ入る）
+pnpm db:seed:fixture # 画面の確認用データ（防災バッグ一式・水10L・期限切れなど）を投入する
 pnpm dev           # 環境変数PORT → .env.localのPORT → 3000 の順で決めたポートで起動
 ```
 
@@ -82,6 +83,7 @@ curl -s -b /tmp/c.txt http://localhost:28002/       # ログイン後の画面
 | `pnpm db:seed:dev` | 開発用ログインのダミーデータとシークレットを用意する |
 | `pnpm db:migrate:dev` / `pnpm db:migrate:deploy` | Prismaマイグレーション |
 | `pnpm db:seed` | 在庫のサンプルデータ投入（`prisma/seed.ts`。`db:seed:dev`の家庭へ入れる） |
+| `pnpm db:seed:fixture` | 受入条件の確認用データ投入（`prisma/fixtures/daily-inventory.ts`。防災バッグ一式・水10L・期限切れなど） |
 
 `develop`・`main`向けのPull Requestでは、CI（`.github/workflows/ci.yml`）が上の
 lint・型チェック・テスト・ビルドを実行します。
