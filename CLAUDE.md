@@ -48,8 +48,9 @@ src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts�
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
+src/lib/inventory/ 在庫ドメインの純関数（units.tsは単位換算、ledger.tsは履歴からの数量計算）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
-prisma/         schema.prismaとmigrations。在庫のモデルは後続Issueで追加する
+prisma/         schema.prisma・migrations・seed.ts（在庫のサンプルデータ）
 scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
 .github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト、secrets-manifest.tsv
 ```
@@ -69,8 +70,15 @@ pnpm build:ci
 `test:unit`はNode標準の`node --test`で`src/**/*.test.ts`を実行する（テストランナーの依存は入れていない）。
 テストからの相対importは`./access.ts`のように拡張子を付ける（Nodeが拡張子付きしか解決しないため。
 tsconfigの`allowImportingTsExtensions`はこのために有効にしている）。DB・外部サービスには接続しない。
+**Nodeの実行はstrip-onlyモードなので、型注釈以外のTS構文（`enum`・`namespace`・パラメータプロパティ）は
+`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`で落ちる。** テスト・`prisma/seed.ts`と、そこから読まれるモジュールでは
+`enum`を使わず、union型か`as const`オブジェクトで書く。
 `build:ci`は`DATABASE_URL`を要求するが接続はしない（CIはプレースホルダーを渡す）。
 挙動が変わる変更は自動テストに加えて実際の動作も確認し、結果をPull Requestへ記録する。
+
+DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため人が実行する）でDBとユーザーを作り、
+`pnpm db:migrate:dev` → `pnpm db:seed:dev`（開発用ユーザーと家庭）→ `pnpm db:seed`（在庫のサンプルデータ）
+の順に流す。`db:seed`は`db:seed:dev`が作る家庭（`dev-household-own`）へ在庫を入れる。
 
 画面確認は`pnpm dev`で行う。ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる。
 Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issue番号`）を渡すため、
@@ -84,6 +92,30 @@ CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必
 `verify-commands`も同じ内容へ直す。** あの文字列は無人修復エージェントへのプロンプトへそのまま
 埋め込まれ、コマンド名だけでなく本数まで書いてある。直し忘れると、新しいステップを実行しないまま
 「検証済み」としてpushされ、CIが落ち続ける。
+
+## データモデル
+
+`prisma/schema.prisma`が在庫データの正本。前半が利用者と家庭の境界（#2）、後半が在庫（#3）。
+在庫側は次の3点が設計の前提で、崩すと在庫の履歴と取消が成立しない。
+
+- **在庫の実体は`StockLot`**。同一商品・同一期限・同一保管場所のかたまりを1件とし、期限や保管場所が違えば別ロットにする
+- **数量の増減は`InventoryTransaction`にappend-onlyで積む**。既存行のUPDATE・DELETEは行わず、
+  取消は「符号を反転した`REVERSAL`行を足す」ことで表す。この形にしてあるため、現在数量は
+  `quantityDelta`の**単純合計**で復元でき、取消済みの行を除外する処理が要らない。
+  `StockLot.quantity`はその合計を保持する集計値で、正本は履歴のほう。ずれは`verifyLotQuantity()`で検出する
+- **他家庭のデータを参照できないことをDB制約で担保する**。家庭に属する全モデルは`householdId`と
+  `@@unique([householdId, id])`を持ち、子から親への参照は`[householdId, 親Id]`の複合外部キーにしてある。
+  `householdId`が違う行はそもそも外部キーを満たせない。`StockLot`の詳細位置はさらに
+  `[householdId, storageLocationId, storagePositionId]`で参照するため、指定した保管場所の配下にない位置も選べない。
+  **新しいモデルを足すときもこの形に揃える**（単一列の外部キーにすると、この保証だけが静かに消える）
+
+`access.ts`の`scopeToHousehold()`はアプリ側の入口の担保で、この複合外部キーはDB側の最後の砦。
+どちらか一方だけにしない。
+
+数量は必ず`Prisma.Decimal`と単位（`UnitCode`）の組で扱い、`src/lib/inventory/units.ts`の関数を通す。
+`number`は小数の加算で誤差が出る。個数系の単位（個・パック・本…）は商品ごとの入数が分からないと互いに換算できないため、
+`sumQuantities()`は換算できない組み合わせを黙って合算せず`UnitConversionError`を投げる。
+合算できないものも落とさず並べたい場面では`groupSummableQuantities()`を使う。
 
 ## 認証と家庭の境界
 

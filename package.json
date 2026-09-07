@@ -16,6 +16,7 @@
     "env:init": "cp -n .env.local.example .env.local && echo '.env.local を編集してください（DATABASE_URL / Supabase）'",
     "db:setup": "bash scripts/setup-db.sh",
     "db:seed:dev": "node scripts/seed-dev.mjs",
+    "db:seed": "prisma db seed",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio"

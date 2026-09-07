@@ -13,5 +13,8 @@ export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
+    // Node 24はTypeScriptを型剥がしでそのまま実行できるため、tsx等のランナーを足していない
+    // （型注釈以外のTS構文＝enum・namespace等はprisma/seed.tsで使えない）。
+    seed: "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/seed.ts",
   },
 });

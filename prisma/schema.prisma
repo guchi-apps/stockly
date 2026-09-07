@@ -1,8 +1,21 @@
 // Stocklyの在庫データはこのスキーマを正本とする。
-// 在庫のモデル（品目・カテゴリ・保管場所など）は後続のデータモデルIssueで追加する。
 //
-// ここにあるのは利用者と家庭の境界だけ（#2）。在庫を持つモデルは必ず`householdId`を持ち、
-// `src/lib/household/access.ts`の関数を通してのみ読み書きする。
+// 前半は利用者と家庭の境界（#2）、後半は在庫のモデル（#3）。
+// 在庫を持つモデルは必ず`householdId`を持ち、`src/lib/household/access.ts`の関数を
+// 通してのみ読み書きする。
+//
+// 在庫側の設計の柱は次の3つ。変更するときはこの前提を崩していないか確かめること。
+//
+// 1. 在庫の実体は「ロット」(StockLot)。同一商品・同一期限・同一保管場所のかたまりを1件とし、
+//    期限や保管位置が違えば別ロットになる。
+// 2. 数量の増減はすべてInventoryTransactionにappend-onlyで積む。既存行のUPDATE/DELETEは
+//    行わず、取消も「符号を反転した REVERSAL 行を足す」ことで表す。
+//    したがってStockLot.quantityは常に「そのロットのtransactionのquantityDeltaの合計」に等しく、
+//    ずれはsrc/lib/inventory/ledger.tsのverifyLotQuantity()で検出できる。
+// 3. 他家庭のデータを参照できないことをDB制約で担保する。家庭に属する全モデルは
+//    householdIdを持ち、@@unique([householdId, id])を置く。子から親への参照は
+//    [householdId, 親Id]の複合外部キーにしてあるため、householdIdが違う行は
+//    そもそも外部キーを満たせない。
 
 generator client {
   provider = "prisma-client-js"
@@ -40,6 +53,16 @@ model Household {
 
   members HouseholdMember[]
 
+  // 在庫側（#3）。在庫データの所有者はHouseholdで、家庭を消せば在庫も消える。
+  categories       Category[]
+  products         Product[]
+  productAliases   ProductAlias[]
+  barcodes         Barcode[]
+  storageLocations StorageLocation[]
+  storagePositions StoragePosition[]
+  stockLots        StockLot[]
+  transactions     InventoryTransaction[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -60,8 +83,14 @@ model HouseholdMember {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// 記録した本人として入出庫履歴から参照される（#3）。
+  transactions InventoryTransaction[]
+
   /// 同じ家庭に同じ利用者が二重に所属しないことをDBで保証する。
   @@unique([householdId, userId])
+  /// 入出庫履歴が[householdId, memberId]の複合外部キーで参照するための一意キー。
+  /// これがないと「他家庭のメンバーを記録者にした履歴」をDBで防げない。
+  @@unique([householdId, id])
   @@index([userId])
 }
 
@@ -70,4 +99,341 @@ model HouseholdMember {
 enum HouseholdRole {
   OWNER
   MEMBER
+}
+
+// ===========================================================================
+// 在庫のモデル（#3）
+// ===========================================================================
+
+/// 単位の次元。次元が違う値は換算できないため、合算してはいけない。
+enum UnitDimension {
+  COUNT // 個数（個・パック・本…）
+  VOLUME // 容量（mL・L）
+  MASS // 重量（g・kg）
+  SERVING // 食数
+  USE // 使用回数
+}
+
+/// 数量の単位。次元と基準単位への換算係数はsrc/lib/inventory/units.tsが持つ。
+/// COUNT次元の単位どうし（個とパックなど）は商品ごとの入数が分からないと換算できないので、
+/// 同じ単位どうしでしか合算できない扱いにしてある。
+enum UnitCode {
+  PIECE // 個
+  PACK // パック
+  BOTTLE // 本
+  CAN // 缶
+  BAG // 袋
+  BOX // 箱
+  ROLL // ロール
+  MILLILITER
+  LITER
+  GRAM
+  KILOGRAM
+  SERVING // 食
+  USE // 回
+}
+
+enum CategoryKind {
+  FOOD // 食材
+  DRINK // 飲料
+  DAILY // 日用品
+  EMERGENCY // 防災用品
+  OTHER
+}
+
+/// 保管場所の種類。温度帯と合わせて防災判定（常温で置けるか）に使う。
+enum StorageKind {
+  REFRIGERATOR
+  FREEZER
+  PANTRY
+  CUPBOARD
+  CLOSET
+  EMERGENCY_STOCK
+  OTHER
+}
+
+enum TemperatureZone {
+  AMBIENT // 常温
+  CHILLED // 冷蔵
+  FROZEN // 冷凍
+}
+
+/// 非常時にその商品が担う役割。防災判定の集計軸。
+enum EmergencyRole {
+  NONE
+  STAPLE_FOOD // 主食
+  SIDE_DISH // 主菜・副菜
+  DRINKING_WATER // 飲料水
+  UTILITY_WATER // 生活用水
+  HEAT_SOURCE // 熱源（カセットボンベ等）
+  SANITATION // 衛生
+  MEDICAL // 医療
+  OTHER
+}
+
+enum ProductAliasSource {
+  MANUAL
+  RECEIPT
+  BARCODE
+  AI
+}
+
+enum BarcodeSymbology {
+  JAN
+  EAN13
+  EAN8
+  UPC_A
+  CODE128
+  QR
+  OTHER
+}
+
+enum StockLotStatus {
+  ACTIVE // 在庫あり
+  DEPLETED // 使い切った
+  DISCARDED // 廃棄した
+}
+
+/// 入出庫の種別。数量の符号は種別では決めず、quantityDeltaの符号で表す
+/// （PURCHASEは正、CONSUME/DISPOSEは負、ADJUST/REVERSALは両方ありうる）。
+enum InventoryTransactionType {
+  PURCHASE // 購入・補充
+  CONSUME // 消費
+  DISPOSE // 廃棄
+  ADJUST // 訂正（棚卸での差分）
+  REVERSAL // 取消（既存transactionの符号反転）
+}
+
+model Category {
+  id          String       @id @default(cuid())
+  householdId String
+  parentId    String?
+  name        String
+  kind        CategoryKind @default(OTHER)
+  sortOrder   Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  household Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  /// 親カテゴリも同じ家庭のものに限る。
+  parent    Category?  @relation("CategoryTree", fields: [householdId, parentId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  children  Category[] @relation("CategoryTree")
+  products  Product[]
+
+  /// 子から[householdId, id]で参照するための一意キー。以下の各モデルにも同じ狙いで置いてある。
+  @@unique([householdId, id])
+  /// カテゴリ名は家庭内で一意。親ごとの一意にしないのは、MySQLのUNIQUEがNULLを重複扱いしないため、
+  /// parentIdがNULLのトップレベルで名前の重複を防げないから。
+  @@unique([householdId, name])
+  @@index([householdId, parentId])
+}
+
+/// 商品マスタ。在庫そのものではなく「何であるか」を持つ。
+model Product {
+  id          String  @id @default(cuid())
+  householdId String
+  categoryId  String?
+  name        String
+  /// ブランド・メーカー。未指定は空文字にする（NULLだと@@uniqueが効かないため）。
+  brand       String  @default("")
+  note        String? @db.Text
+
+  /// 在庫数量の既定の単位。ロットごとに別の単位を使うこともできる。
+  defaultUnit UnitCode @default(PIECE)
+  /// 1defaultUnitあたりの内容量（例: 1本 = 500 MILLILITER）。容量での集計に使う。
+  contentAmount Decimal?  @db.Decimal(14, 3)
+  contentUnit   UnitCode?
+  /// 1defaultUnitあたりの食数・使用回数。防災の「何日分あるか」の集計に使う。
+  servingsPerUnit Decimal? @db.Decimal(14, 3)
+  usesPerUnit     Decimal? @db.Decimal(14, 3)
+
+  // --- 防災判定用の属性 ---
+  /// 保管に必要な温度帯。AMBIENTなら停電時も置いておける。
+  temperatureZone TemperatureZone @default(AMBIENT)
+  /// 食べる・使うのに加熱が要るか。
+  requiresHeating Boolean         @default(false)
+  /// 食べる・使うのに水が要るか（アルファ米など）。
+  requiresWater   Boolean         @default(false)
+  /// 非常時に担う役割。
+  emergencyRole   EmergencyRole   @default(NONE)
+  /// 上の固定列で表せない防災判定用の属性を足すための逃がし先。
+  /// 判定に恒常的に使う属性は、ここではなく列として切り出すこと。
+  disasterAttributes Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household    Household              @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  category     Category?              @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  aliases      ProductAlias[]
+  barcodes     Barcode[]
+  stockLots    StockLot[]
+  transactions InventoryTransaction[]
+
+  @@unique([householdId, id])
+  @@unique([householdId, name, brand])
+  @@index([householdId, categoryId])
+  @@index([householdId, emergencyRole])
+}
+
+/// レシート読み取り・バーコード照会・AI候補が返した表記ゆれを商品に寄せるための別名。
+model ProductAlias {
+  id          String             @id @default(cuid())
+  householdId String
+  productId   String
+  alias       String
+  source      ProductAliasSource @default(MANUAL)
+  /// 自動生成した候補の確からしさ（0〜1）。手入力はnull。
+  confidence  Decimal?           @db.Decimal(4, 3)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  /// 同じ別名が複数の商品を指すと解決できないので、家庭内で一意にする。
+  @@unique([householdId, alias])
+  @@index([householdId, productId])
+}
+
+model Barcode {
+  id          String           @id @default(cuid())
+  householdId String
+  productId   String
+  code        String
+  symbology   BarcodeSymbology @default(JAN)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  @@unique([householdId, code])
+  @@index([householdId, productId])
+}
+
+model StorageLocation {
+  id              String          @id @default(cuid())
+  householdId     String
+  name            String
+  kind            StorageKind     @default(OTHER)
+  temperatureZone TemperatureZone @default(AMBIENT)
+  sortOrder       Int             @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  household Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  positions StoragePosition[]
+  stockLots StockLot[]
+
+  @@unique([householdId, id])
+  @@unique([householdId, name])
+}
+
+/// 保管場所の中の詳細位置（冷蔵庫の「上段」「ドアポケット」など）。
+model StoragePosition {
+  id                String   @id @default(cuid())
+  householdId       String
+  storageLocationId String
+  name              String
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  household       Household       @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  storageLocation StorageLocation @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  stockLots       StockLot[]
+
+  @@unique([householdId, id])
+  @@unique([householdId, storageLocationId, name])
+  /// StockLotが「保管場所と詳細位置の組み合わせ」で参照するための複合キー。
+  /// これによりStockLotは、指定した保管場所の配下にない詳細位置を参照できない。
+  @@unique([householdId, storageLocationId, id])
+  @@index([householdId, storageLocationId])
+}
+
+/// 在庫の実体。同一商品・同一期限・同一保管場所のかたまりを1件とする。
+model StockLot {
+  id                String  @id @default(cuid())
+  householdId       String
+  productId         String
+  storageLocationId String?
+  storagePositionId String?
+
+  /// 現在数量。transactionsのquantityDeltaの合計と常に一致する集計値で、
+  /// 正本は履歴のほう。ずれの検出はverifyLotQuantity()で行う。
+  quantity Decimal  @default(0) @db.Decimal(14, 3)
+  unit     UnitCode
+
+  /// 賞味期限（品質が保たれる期限）。
+  bestBeforeDate DateTime? @db.Date
+  /// 消費期限（安全に食べられる期限）。
+  useByDate      DateTime? @db.Date
+  /// 開封日時。開封後の期限計算に使う。
+  openedAt       DateTime?
+  acquiredAt     DateTime?
+
+  status StockLotStatus @default(ACTIVE)
+  note   String?        @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household       Household              @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product         Product                @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  storageLocation StorageLocation?       @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  /// 詳細位置は「同じ家庭の、指定した保管場所の配下」に限る。
+  storagePosition StoragePosition?       @relation(fields: [householdId, storageLocationId, storagePositionId], references: [householdId, storageLocationId, id], onDelete: Restrict, onUpdate: Restrict)
+  transactions    InventoryTransaction[]
+
+  @@unique([householdId, id])
+  @@index([householdId, productId, status])
+  @@index([householdId, storageLocationId])
+  @@index([householdId, storagePositionId])
+  @@index([householdId, status, bestBeforeDate])
+  @@index([householdId, status, useByDate])
+}
+
+/// 入出庫履歴。append-onlyで、既存行のUPDATE/DELETEは行わない。
+/// 取消はreversesTransactionIdを持つREVERSAL行を足して表すため、
+/// 現在数量は常に「quantityDeltaの単純合計」で復元できる。
+model InventoryTransaction {
+  id          String                   @id @default(cuid())
+  householdId String
+  stockLotId  String
+  /// stockLot.productIdと同じ値。商品軸の集計をロットをまたいで引くために持つ。
+  productId   String
+  /// 記録した人（HouseholdMember）。システムが入れた行はnull。
+  memberId    String?
+  type        InventoryTransactionType
+
+  /// 符号付きの増減量。正が入庫、負が出庫。
+  quantityDelta Decimal  @db.Decimal(14, 3)
+  /// quantityDeltaの単位。ロットの単位と換算できない単位は入れてはいけない。
+  unit          UnitCode
+
+  /// 取消対象のtransaction。REVERSAL行だけが値を持つ。
+  reversesTransactionId String?
+
+  /// 実際に購入・消費した時刻。過去に遡って記録できるようrecordedAtと分ける。
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+  note       String?  @db.Text
+
+  household  Household             @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  stockLot   StockLot              @relation(fields: [householdId, stockLotId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  product    Product               @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  member     HouseholdMember?      @relation(fields: [householdId, memberId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  reverses   InventoryTransaction? @relation("TransactionReversal", fields: [householdId, reversesTransactionId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  reversedBy InventoryTransaction? @relation("TransactionReversal")
+
+  @@unique([householdId, id])
+  /// 1件のtransactionを二重に取り消せないようにする。
+  @@unique([householdId, reversesTransactionId])
+  @@index([householdId, stockLotId, occurredAt])
+  @@index([householdId, productId, occurredAt])
+  @@index([householdId, occurredAt])
+  @@index([householdId, memberId])
 }
