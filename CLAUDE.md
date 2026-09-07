@@ -34,9 +34,20 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 各Issueには、目的、背景、受入条件、技術上の前提、依存・関連Issueを明記する。
 実装前にIssue本文と最新コメントを読み、担当Issueの範囲だけを変更する。
 
+## ディレクトリ構成
+
+```
+src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
+src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
+src/lib/        ユーティリティ（utils.tsはshadcn/uiのcn）
+prisma/         schema.prisma。モデルは後続Issueで追加する
+scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
+.github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト
+```
+
 ## 検証
 
-初期化Issueで次のscriptsを`package.json`へ定義し、実装後に実行する。
+`package.json`に定義済みの次のscriptsを、実装後に実行する。
 
 ```bash
 pnpm lint
@@ -44,8 +55,29 @@ pnpm typecheck
 pnpm build:ci
 ```
 
-`typecheck`は`next typegen && tsc --noEmit`、DBを使う`build:ci`は`prisma generate && next build`とする。
+`typecheck`は`next typegen && tsc --noEmit`、DBを使う`build:ci`は`prisma generate && next build`。
+`build:ci`は`DATABASE_URL`を要求するが接続はしない（CIはプレースホルダーを渡す）。
 挙動が変わる変更は自動テストに加えて実際の動作も確認し、結果をPull Requestへ記録する。
+
+画面確認は`pnpm dev`で行う。ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる。
+Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issue番号`）を渡すため、
+`.env.local`に書かなくてよい。`.env.local`自体が無い場合は`pnpm env:init`で雛形から作る。
+
+CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必須チェックであり、
+ワークフロー名`CI`は`claude-ci-fix.yml`と`claude-conflict-resolve.yml`が購読している。
+どちらも変更すると無言で止まるため、変える場合は参照側もあわせて直す。
+
+## shadcn/uiのコンポーネント追加
+
+`pnpm dlx shadcn@latest add <component>` で追加し、`src/components/ui/`のファイルは手で書いたものと混ぜない。
+初期化は `shadcn@latest init -y -b radix -p nova` で行った（`components.json`の`style`は`radix-nova`）。
+`-b`はコンポーネントライブラリ（`base` / `radix` / `aria`）で、baseColorではない。
+`src/lib/utils.ts`の`cn`は`cn`パッケージの再エクスポートで、clsx + tailwind-mergeは入っていない。
+
+## AGENTS.mdのNext.js管理ブロック
+
+`AGENTS.md`の`<!-- BEGIN:nextjs-agent-rules -->`〜`<!-- END:nextjs-agent-rules -->`は
+`next dev`が自動生成・再追記する。消しても再生成されるだけなので、差分に出たらそのままコミットする。
 
 ## 依存関係とシークレット
 

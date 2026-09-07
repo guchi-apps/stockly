@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Stockly">
+  <!-- 暫定アプリアイコン。ふた付きの収納箱で「家の在庫をしまう」ことを表す。
+       背景は全面に敷く（Androidのmaskableは外周を削るため角丸を持たせない）。
+       図柄は中央50%に収め、maskableの安全領域（内側80%）に入るようにしている。
+       このファイルが唯一の原図で、public/icon-192.png・icon-512.png・
+       src/app/apple-icon.png はここから rsvg-convert で書き出す（README参照）。 -->
+  <rect width="48" height="48" fill="#047857"/>
+  <g transform="translate(12 12)">
+    <rect x="2" y="3" width="20" height="5" rx="1.5" fill="#ffffff"/>
+    <rect x="4" y="9" width="16" height="12" rx="2" fill="#ffffff"/>
+    <rect x="9.5" y="12.5" width="5" height="2" rx="1" fill="#047857"/>
+  </g>
+</svg>
