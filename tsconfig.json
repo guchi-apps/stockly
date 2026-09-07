@@ -9,12 +9,9 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
-    // src/lib/inventory/*.ts と prisma/seed.ts は `node --test` / `prisma db seed` から
-    // Node（型剥がし）で直接実行する。Nodeは拡張子を補完しないため import 先を
-    // `./units.ts` のように書く必要があり、それを型検査でも許可する。
-    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
-    // `*.test.ts` は Node標準の `node --test` がそのまま実行する（pnpm test:unit）。
+    // `*.test.ts` は Node標準の `node --test` が、`prisma/seed.ts` は `prisma db seed` が、
+    // それぞれNode（型剥がし）でそのまま実行する。
     // Nodeは拡張子付きの相対importしか解決しないため、`./access.ts` の形を許可する。
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
