@@ -117,6 +117,11 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   公開値はorganizationの共通値を`inherit`し、このリポジトリ固有は`TARGET_DIR`・`DB_NAME`・
   `ALLOWED_GOOGLE_EMAILS`だけ。**`repo`なのにSOURCEが`-`の行を作らない**（同期が必ず失敗し、
   値が空のままワークフローだけ通る）
+- **公開URLで別アプリの画面が出たら、まず証明書のCNを見る。** `*.gucchii.com`はワイルドカードで
+  VPSへ向いているため、vhostが無いホスト名でもTLSハンドシェイクまで成立し、Apacheが443番の
+  既定vhostを返す。DNSもプロセスも正常に見えるのに中身だけ違うので気付きにくい。
+  `echo | openssl s_client -connect stockly.gucchii.com:443 -servername stockly.gucchii.com 2>/dev/null | openssl x509 -noout -subject`
+  のCNが別ドメインなら、Stocklyのvhostがまだ無い（#26で実際にops-dashboardが表示されていた）
 - deployジョブの成功は公開できたことを保証しない。ヘルスチェックが叩くのはVPS内の
   `127.0.0.1:3116`で、ApacheのVirtualHostが無くても通る。公開URLの疎通は後段の警告のみのステップで見る
 
