@@ -57,11 +57,27 @@ model Household {
   categories       Category[]
   products         Product[]
   productAliases   ProductAlias[]
+  productRules     ProductRule[]
   barcodes         Barcode[]
   storageLocations StorageLocation[]
   storagePositions StoragePosition[]
   stockLots        StockLot[]
   transactions     InventoryTransaction[]
+
+  // 補充とNotion買い物リスト連携（#6）。
+  replenishmentRules  ReplenishmentRule[]
+  shoppingListEntries ShoppingListEntry[]
+
+  // 期限と通知（#5）。
+  expirySetting          ExpirySetting?
+  notificationDeliveries NotificationDelivery[]
+
+  // 防災ストックの判定（#7）。
+  disasterPlanSetting DisasterPlanSetting?
+
+  // 防災バッグの点検（#8）。
+  disasterBags            DisasterBag[]
+  disasterBagInspections  DisasterBagInspection[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -159,6 +175,11 @@ enum TemperatureZone {
 }
 
 /// 非常時にその商品が担う役割。防災判定の集計軸。
+///
+/// **`src/lib/disaster/rules.ts`の`DISASTER_CATEGORY_RULES`が、この値を6区分
+/// （食料・飲料・衛生・照明・電源・熱源）へ割り当てる。** 値を足したら、どの区分で数えるか
+/// （またはどの区分でも数えないか）をあちらにも書くこと。書き忘れた役割は防災の集計から
+/// 静かに落ちる。
 enum EmergencyRole {
   NONE
   STAPLE_FOOD // 主食
@@ -167,6 +188,8 @@ enum EmergencyRole {
   UTILITY_WATER // 生活用水
   HEAT_SOURCE // 熱源（カセットボンベ等）
   SANITATION // 衛生
+  LIGHTING // 照明（ライト・ランタン）
+  POWER // 電源（モバイルバッテリー・乾電池）
   MEDICAL // 医療
   OTHER
 }
@@ -186,6 +209,24 @@ enum BarcodeSymbology {
   CODE128
   QR
   OTHER
+}
+
+/// コードと商品の結び付きが、どうやって決まったか（#9）。
+///
+/// 外部の商品APIはまだ入れていないので、実際に付くのはSCANかMANUALだけ。
+/// EXTERNALは、APIを入れたときに「この紐付けは人ではなくAPIが決めた」と見分けるために置いてある。
+enum BarcodeSource {
+  SCAN // カメラで読み取って登録した
+  MANUAL // コードを手で入力して登録した
+  EXTERNAL // 外部の商品APIの応答から作った
+}
+
+/// 期限の付け方。ロットは賞味期限と消費期限のどちらか一方だけを持つ。
+/// src/lib/inventory/operations.tsの`ExpiryKind`と同じ並びにしてある。
+enum ExpiryKind {
+  NONE
+  BEST_BEFORE
+  USE_BY
 }
 
 enum StockLotStatus {
@@ -214,11 +255,15 @@ model Category {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  household Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  household    Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
   /// 親カテゴリも同じ家庭のものに限る。
-  parent    Category?  @relation("CategoryTree", fields: [householdId, parentId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
-  children  Category[] @relation("CategoryTree")
-  products  Product[]
+  parent       Category?     @relation("CategoryTree", fields: [householdId, parentId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  children     Category[]    @relation("CategoryTree")
+  products     Product[]
+  productRules ProductRule[]
+
+  replenishmentRules  ReplenishmentRule[]
+  shoppingListEntries ShoppingListEntry[]
 
   /// 子から[householdId, id]で参照するための一意キー。以下の各モデルにも同じ狙いで置いてある。
   @@unique([householdId, id])
@@ -239,23 +284,23 @@ model Product {
   note        String? @db.Text
 
   /// 在庫数量の既定の単位。ロットごとに別の単位を使うこともできる。
-  defaultUnit UnitCode @default(PIECE)
+  defaultUnit     UnitCode  @default(PIECE)
   /// 1defaultUnitあたりの内容量（例: 1本 = 500 MILLILITER）。容量での集計に使う。
-  contentAmount Decimal?  @db.Decimal(14, 3)
-  contentUnit   UnitCode?
+  contentAmount   Decimal?  @db.Decimal(14, 3)
+  contentUnit     UnitCode?
   /// 1defaultUnitあたりの食数・使用回数。防災の「何日分あるか」の集計に使う。
-  servingsPerUnit Decimal? @db.Decimal(14, 3)
-  usesPerUnit     Decimal? @db.Decimal(14, 3)
+  servingsPerUnit Decimal?  @db.Decimal(14, 3)
+  usesPerUnit     Decimal?  @db.Decimal(14, 3)
 
   // --- 防災判定用の属性 ---
   /// 保管に必要な温度帯。AMBIENTなら停電時も置いておける。
-  temperatureZone TemperatureZone @default(AMBIENT)
+  temperatureZone    TemperatureZone @default(AMBIENT)
   /// 食べる・使うのに加熱が要るか。
-  requiresHeating Boolean         @default(false)
+  requiresHeating    Boolean         @default(false)
   /// 食べる・使うのに水が要るか（アルファ米など）。
-  requiresWater   Boolean         @default(false)
+  requiresWater      Boolean         @default(false)
   /// 非常時に担う役割。
-  emergencyRole   EmergencyRole   @default(NONE)
+  emergencyRole      EmergencyRole   @default(NONE)
   /// 上の固定列で表せない防災判定用の属性を足すための逃がし先。
   /// 判定に恒常的に使う属性は、ここではなく列として切り出すこと。
   disasterAttributes Json?
@@ -267,8 +312,13 @@ model Product {
   category     Category?              @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   aliases      ProductAlias[]
   barcodes     Barcode[]
+  /// バーコードから呼び出す候補の最優先の材料（#9）。商品1つにつき0件か1件。
+  rule         ProductRule?
   stockLots    StockLot[]
   transactions InventoryTransaction[]
+
+  replenishmentRules  ReplenishmentRule[]
+  shoppingListEntries ShoppingListEntry[]
 
   @@unique([householdId, id])
   @@unique([householdId, name, brand])
@@ -297,14 +347,38 @@ model ProductAlias {
   @@index([householdId, productId])
 }
 
+/// バーコードと商品の紐付け（#9）。
+///
+/// **1つのコードは家庭内で1商品にしか紐付かない**（`@@unique([householdId, code])`）。
+/// 読み取ったコードから商品が一意に決まらないと候補を出せないため、重複は作らせず、
+/// 間違っていた場合は「付け替え」でこの行のproductIdを差し替える。
 model Barcode {
   id          String           @id @default(cuid())
   householdId String
   productId   String
   code        String
   symbology   BarcodeSymbology @default(JAN)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+
+  /// この紐付けをどうやって決めたか。
+  source     BarcodeSource @default(MANUAL)
+  /// 外部の商品APIから作った場合の出典名（例: `openbd`）。使っていなければ空文字。
+  sourceName String        @default("")
+  /// 外部APIの応答をそのまま残したもの。同じコードを二度問い合わせないためのキャッシュで、
+  /// 中身の形は出典ごとに違う。**アプリの判断はここを読まずに、上の列と商品マスタで行う**
+  /// （出典ごとの形に依存すると、出典を替えたときに壊れる）。
+  sourcePayload Json?
+  /// `sourcePayload`を取得した時刻。キャッシュの鮮度の判定に使う。
+  fetchedAt     DateTime?
+
+  /// このコードで在庫を登録した回数と、最後に登録した時刻。
+  useCount   Int       @default(0)
+  lastUsedAt DateTime?
+  /// 読み取ったのに別の商品として登録された回数。誤紐付けの疑いとして一覧の先頭に出す。
+  /// 付け替えるか「そのままにする」を選んだ時点で0へ戻す。
+  mismatchCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
   product   Product   @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
@@ -312,6 +386,50 @@ model Barcode {
   @@unique([householdId, id])
   @@unique([householdId, code])
   @@index([householdId, productId])
+}
+
+/// 商品ごとの「前回ユーザーが確定した内容」＝学習ルール（#9）。
+///
+/// バーコードから出す候補の優先順位は **確定済みルール > バーコードマスタ > AI候補** で、
+/// これはその最上位。在庫を登録・編集して確定するたびに上書きするので、
+/// AIや外部APIが何を返しても、その家庭で最後に人が決めた値が勝つ。
+///
+/// **商品1つにつき1行**（`@@unique([householdId, productId])`）。履歴として複数世代を残さないのは、
+/// 使うのが常に最新の1件だからで、いつ何を確定したかは`InventoryTransaction`と`StockLot`に残る。
+model ProductRule {
+  id          String @id @default(cuid())
+  householdId String
+  productId   String
+
+  categoryId        String?
+  unit              UnitCode?
+  storageLocationId String?
+  storagePositionId String?
+
+  expiryKind ExpiryKind @default(NONE)
+  /// 登録日から期限までの日数。前回の入力から求め、次回は「今日＋この日数」を既定の日付にする。
+  /// 日付そのものを覚えると、次に買ったときには必ず過ぎている。
+  shelfLifeDays Int?
+
+  /// 確定した回数と最後の時刻。候補の説明（「3回登録しています」）に使う。
+  confirmedCount Int      @default(0)
+  confirmedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household       Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product         Product          @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  category        Category?        @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  storageLocation StorageLocation? @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  /// 詳細位置は「同じ家庭の、指定した保管場所の配下」に限る（StockLotと同じ形）。
+  storagePosition StoragePosition? @relation(fields: [householdId, storageLocationId, storagePositionId], references: [householdId, storageLocationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([householdId, id])
+  @@unique([householdId, productId])
+  @@index([householdId, categoryId])
+  @@index([householdId, storageLocationId])
+  @@index([householdId, storagePositionId])
 }
 
 model StorageLocation {
@@ -324,9 +442,12 @@ model StorageLocation {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  household Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  positions StoragePosition[]
-  stockLots StockLot[]
+  household    Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  positions    StoragePosition[]
+  stockLots    StockLot[]
+  productRules ProductRule[]
+  /// 防災バッグとして点検するときの基準（#8）。種別がEMERGENCY_STOCKの保管場所だけが持つ。
+  disasterBag  DisasterBag?
 
   @@unique([householdId, id])
   @@unique([householdId, name])
@@ -345,6 +466,7 @@ model StoragePosition {
   household       Household       @relation(fields: [householdId], references: [id], onDelete: Cascade)
   storageLocation StorageLocation @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
   stockLots       StockLot[]
+  productRules    ProductRule[]
 
   @@unique([householdId, id])
   @@unique([householdId, storageLocationId, name])
@@ -371,6 +493,9 @@ model StockLot {
   bestBeforeDate DateTime? @db.Date
   /// 消費期限（安全に食べられる期限）。
   useByDate      DateTime? @db.Date
+  /// 「この在庫に期限は無い」と利用者が明示したか（塩・日用品・工具など）。
+  /// 期限の列が空でも、**入れ忘れ（要確認）とは区別する**。既定はfalse＝まだ確かめていない。
+  noExpiry       Boolean   @default(false)
   /// 開封日時。開封後の期限計算に使う。
   openedAt       DateTime?
   acquiredAt     DateTime?
@@ -436,4 +561,312 @@ model InventoryTransaction {
   @@index([householdId, productId, occurredAt])
   @@index([householdId, occurredAt])
   @@index([householdId, memberId])
+}
+
+// ===========================================================================
+// 補充とNotion買い物リスト連携（#6）
+// ===========================================================================
+
+/// 補充候補をNotionへ送った記録の状態。
+enum ShoppingListEntryStatus {
+  PENDING // 候補として確定したが、まだNotionへ送っていない
+  SENDING // Notionへ送信中（同じ候補の二重送信をここで止める）
+  SENT // Notionの項目を作った・更新した
+  FAILED // 送信に失敗した。理由をlastErrorに残し、そのまま送り直せる
+}
+
+/// 「これ以下になったら、ここまで買い足す」という補充の基準。
+///
+/// 対象は**商品またはカテゴリのどちらか一方**。カテゴリの基準は、そのカテゴリに属する
+/// 商品の在庫を判定単位へ換算して合計し、まとめて1件の候補にする。
+model ReplenishmentRule {
+  id          String  @id @default(cuid())
+  householdId String
+  /// 商品ごとの基準。categoryIdとはどちらか一方だけを持つ（service.tsが担保する）。
+  productId   String?
+  /// カテゴリごとの基準。
+  categoryId  String?
+
+  /// この数量以下になったら補充候補にする。0（「なくなったら買う」）も許す。
+  thresholdAmount Decimal  @db.Decimal(14, 3)
+  /// 補充後にありたい数量。不足量は「targetAmount − 現在数量」で出す。
+  targetAmount    Decimal  @db.Decimal(14, 3)
+  /// 判定に使う単位。**この単位へ換算できない在庫は数えない**（個とパックのように
+  /// 商品ごとの入数が分からないと換算できない組み合わせがあるため。src/lib/inventory/units.ts）。
+  unit            UnitCode
+  /// 一時的に候補から外すためのスイッチ。基準そのものは残る。
+  enabled         Boolean  @default(true)
+  note            String?  @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product   Product?  @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  category  Category? @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  /// 同じ対象に基準を二重に作らない。**MySQLのUNIQUEはNULLを重複扱いしない**ため、
+  /// 商品の基準（categoryIdがNULL）とカテゴリの基準（productIdがNULL）を
+  /// 1つのテーブルに置いても互いを縛らない。
+  @@unique([householdId, productId])
+  @@unique([householdId, categoryId])
+  @@index([householdId, enabled])
+}
+
+/// Notionの買い物リストへ送った（または送ろうとしている）補充候補。
+///
+/// **買い物リストの正本はNotionで、この行はStocklyからの送信記録**。Notion側での完了・編集は
+/// 読み戻さず、在庫へは一切反映しない（#6の受入条件）。項目を作り直したいときは、
+/// この行を消す（画面の「取り下げる」）と、次の送信で新しいNotion項目が作られる。
+model ShoppingListEntry {
+  id          String  @id @default(cuid())
+  householdId String
+  /// 送る対象。ReplenishmentRuleと同じく、商品またはカテゴリのどちらか一方を持つ。
+  productId   String?
+  categoryId  String?
+
+  /// 送った時点の表示名。商品名が後から変わっても、Notionへ何を送ったかを追える。
+  name           String
+  /// 送った不足量と、その単位。
+  shortageAmount Decimal  @db.Decimal(14, 3)
+  unit           UnitCode
+
+  status ShoppingListEntryStatus @default(PENDING)
+
+  /// Notion側のページid。**2回目以降はこのページを更新するので、項目が重複しない**
+  /// （受入条件のidempotency/対応ID）。Notionで手動削除された場合だけ、作り直して付け替える。
+  notionPageId String?
+  notionUrl    String? @db.Text
+
+  /// 最後に失敗した理由。画面に出して、そのまま送り直せるようにする。
+  /// **接続に失敗しても行は残す**（在庫は元から変えていないので、戻すものは無い）。
+  lastError String? @db.Text
+
+  /// 送信を始めた時刻。SENDINGのまま取り残された行を、一定時間後に送り直せるようにする。
+  sendingStartedAt DateTime?
+  lastSentAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product   Product?  @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  category  Category? @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  /// 同じ対象の送信記録は1件だけ。ここが「同じ候補を送り直しても増えない」ことの土台で、
+  /// 2回目の送信は既存の行（＝既存のNotionページ）を更新する。
+  @@unique([householdId, productId])
+  @@unique([householdId, categoryId])
+  @@index([householdId, status])
+}
+
+// ===========================================================================
+// 期限と通知（#5）
+// ===========================================================================
+
+/// 通知の種別。いまは期限だけだが、補充（#6）など別の理由の通知もここへ足す。
+enum NotificationKind {
+  EXPIRY // 期限切れ・期限間近
+}
+
+/// 通知先。**新しい送り先を足すときは、ここと`src/lib/notifications/channels.ts`の両方へ足す。**
+/// メール・LINE等の外部サービスは、導入の可否をユーザーに確認してから追加する。
+enum NotificationChannel {
+  IN_APP // アプリ内のお知らせ（この行そのものが本体）
+  LOG // サーバーログ
+}
+
+enum NotificationStatus {
+  SENT // 送信済み
+  FAILED // 送信を試みて失敗した
+}
+
+/// 家庭ごとの期限の見かた（#5）。無い家庭は`DEFAULT_EXPIRY_POLICY`と同じ既定値で動く。
+model ExpirySetting {
+  id          String @id @default(cuid())
+  householdId String @unique
+
+  /// 賞味期限を「期限間近」とみなす残り日数。
+  bestBeforeSoonDays Int @default(7)
+  /// 消費期限を「期限間近」とみなす残り日数。切れたら食べないため、賞味期限より短くしてある。
+  useBySoonDays      Int @default(3)
+
+  /// 期限が未入力の在庫を「要確認」として先頭に出すか。**期限内とはみなさない。**
+  highlightUnknownExpiry Boolean @default(true)
+  /// 期限の通知を送るか。
+  notifyEnabled          Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, id])
+}
+
+/// 送った通知の記録。**重複通知を防ぐ台帳そのもの**で、アプリ内のお知らせの実体でもある。
+///
+/// 同じ内容を二度送らないことは`@@unique([householdId, channel, dedupeKey])`が担保する。
+/// 2回目以降は行を足さず、既存の行の`suppressedCount`を増やす（送らなかったことも記録に残す）。
+/// dedupeKeyの組み立ては`src/lib/notifications/expiry-message.ts`が持つ。
+model NotificationDelivery {
+  id          String              @id @default(cuid())
+  householdId String
+  kind        NotificationKind    @default(EXPIRY)
+  channel     NotificationChannel
+
+  /// 同じ通知かどうかの判定キー。期限では「対象ロットとその状態の組み合わせ」から作るため、
+  /// 状況が変わらないかぎり何度実行しても増えない。
+  dedupeKey String @db.VarChar(120)
+
+  title   String
+  body    String @db.Text
+  /// 通知の対象（ロットidと状態）。あとから「何を根拠に送ったか」を追えるようにする。
+  payload Json?
+
+  status NotificationStatus @default(SENT)
+  error  String?            @db.Text
+
+  /// 同じ内容で送信を見送った回数と、その最後の時刻。重複防止が効いていることの記録。
+  suppressedCount  Int       @default(0)
+  lastSuppressedAt DateTime?
+
+  sentAt DateTime  @default(now())
+  readAt DateTime?
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, id])
+  @@unique([householdId, channel, dedupeKey])
+  @@index([householdId, kind, sentAt])
+}
+
+// ===========================================================================
+// 防災ストックの判定（#7）
+// ===========================================================================
+
+/// 家庭ごとの防災の基準（#7）。無い家庭は`DEFAULT_DISASTER_PLAN`と同じ既定値で動くため、
+/// 家庭を作るたびに行を用意しなくてよい（`ExpirySetting`と同じ考え方）。
+///
+/// **判定そのものはこのテーブルに保存しない。** 在庫が動けば結果は変わるので、残した行は
+/// すぐ古くなる。「後から判定結果を再説明できる」ことは、
+/// 「ルール版・基準・根拠ロット・除外理由を画面に出す」＋「同じ入力なら必ず同じ結果になる」
+/// （`src/lib/disaster/assess.ts`は純関数で、乱数も現在時刻の暗黙参照も持たない）で満たす。
+model DisasterPlanSetting {
+  id          String @id @default(cuid())
+  householdId String @unique
+
+  /// 何人ぶんを、何日ぶん備えるか。必要量はこの2つに1人1日あたりの量を掛けて出す。
+  peopleCount Int @default(2)
+  targetDays  Int @default(3)
+
+  // --- 1人1日あたりの必要量 ---
+  /// 飲料水（L / 人日）。飲用と調理をあわせた一般的な目安が3L。
+  waterLitersPerPersonDay    Decimal @default(3) @db.Decimal(14, 3)
+  /// 食事（食 / 人日）。1食は商品の`servingsPerUnit`で数える。
+  foodServingsPerPersonDay   Decimal @default(3) @db.Decimal(14, 3)
+  /// 携帯トイレ（回 / 人日）。衛生の必要量として数える。
+  sanitationUsesPerPersonDay Decimal @default(5) @db.Decimal(14, 3)
+
+  // --- 人日ではない基準 ---
+  /// 照明（個 / 人）。使うほど減るものではないので日数では増やさない。
+  lightingUnitsPerPerson Decimal @default(1) @db.Decimal(14, 3)
+  /// 電源（個 / 人）。同上。
+  powerUnitsPerPerson    Decimal @default(1) @db.Decimal(14, 3)
+  /// 熱源（回 / 日）。家族で1つの火を使う想定なので人数では増やさない。
+  heatSourceUsesPerDay   Decimal @default(1) @db.Decimal(14, 3)
+
+  // --- 何を数えるか ---
+  /// 冷蔵・冷凍の在庫を防災の日数に含めるか。**停電で使えなくなる前提なので既定はfalse。**
+  /// 受入条件の「明示設定なしに例外化しない」がこの2列。
+  includeChilled              Boolean @default(false)
+  includeFrozen               Boolean @default(false)
+  /// 開封済み（飲みかけ・使いかけ）を数えるか。残量と衛生状態が分からないため既定はfalse。
+  includeOpened               Boolean @default(false)
+  /// 加熱が要る食料を、熱源の在庫があるときだけ数えるか。
+  requireHeatSourceForHeating Boolean @default(true)
+  /// 水が要る食料を、飲料水の在庫があるときだけ数えるか。
+  requireWaterForRehydration  Boolean @default(true)
+
+  /// 保存した時点の判定ルールの版（`DISASTER_RULE_VERSION`）。
+  /// 判定結果と一緒に画面へ出し、あとから「どの規則で出した数字か」を辿れるようにする。
+  ruleVersion String @default("v1") @db.VarChar(20)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, id])
+}
+
+/// 防災バッグの点検の基準（#8）。
+///
+/// **バッグの実体は`StorageLocation`（種別`EMERGENCY_STOCK`）で、ここはそこに
+/// 「点検の単位として見るときの目標」を足すだけの拡張。** 防災用の別在庫は作らない
+/// （日常の在庫から集計するというアプリの前提を崩さないため）。
+///
+/// 行が無いバッグは`DEFAULT_DISASTER_BAG_PLAN`（`src/lib/disaster/bag.ts`）で動く。
+/// **スキーマの`@default`とコードの既定値は別々に書いてあるので、片方だけ変えないこと**
+/// （`DisasterPlanSetting`と同じ約束）。
+model DisasterBag {
+  id                String @id @default(cuid())
+  householdId       String
+  /// このバッグにあたる保管場所。1つの保管場所につき1行だけ持つ。
+  storageLocationId String
+
+  /// このバッグ1つで何人・何日ぶんを目指すか。
+  ///
+  /// **家庭全体の基準（`DisasterPlanSetting`）とは別に持つ。** 持ち出し袋に家全体の
+  /// 3日ぶんを求めるとどのバッグも常に不足になり、点検の役に立たない。
+  peopleCount Int @default(1)
+  targetDays  Int @default(1)
+
+  /// 何日ごとに点検するか。最後の点検日にこれを足したものが次回の予定になる。
+  inspectionIntervalDays Int @default(180)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household       Household               @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  storageLocation StorageLocation         @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  inspections     DisasterBagInspection[]
+
+  @@unique([householdId, id])
+  /// 1つの保管場所につき1行。2行目を作らせない。
+  @@unique([householdId, storageLocationId])
+}
+
+/// 防災バッグを点検した記録（#8）。
+///
+/// **ここに残すのは「そのとき人が見た結果」で、充足の判定結果そのものは保存しない**
+/// （在庫が動けば変わるため。#7の方針と同じ）。件数だけは点検時点の状態として残す——
+/// 後から「前回はいくつ手当てが要ったか」を振り返れるようにするため、再計算では出せない。
+model DisasterBagInspection {
+  id            String @id @default(cuid())
+  householdId   String
+  disasterBagId String
+
+  /// 点検した日（日本時間の日付）。時刻は持たない。
+  inspectedOn DateTime @db.Date
+  note        String?  @db.VarChar(500)
+
+  /// 点検した時点の中身の件数と、手当てが要ったものの件数。
+  itemCount          Int @default(0)
+  expiredCount       Int @default(0)
+  expiringSoonCount  Int @default(0)
+  unknownExpiryCount Int @default(0)
+
+  /// 記録した時点の判定ルールの版（`DISASTER_RULE_VERSION`）。
+  ruleVersion String @db.VarChar(20)
+
+  createdAt DateTime @default(now())
+
+  household   Household   @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  disasterBag DisasterBag @relation(fields: [householdId, disasterBagId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  @@index([householdId, disasterBagId, inspectedOn])
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useId, useState } from "react";
+import { useActionState, useId, useState, type ReactNode } from "react";
 import Link from "next/link";
 
 import { EMPTY_FORM_STATE, type InventoryFormState } from "@/app/(app)/form-state";
@@ -8,7 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { EXPIRY_KINDS, EXPIRY_KIND_LABELS } from "@/lib/inventory/operations";
+import {
+  CANDIDATE_SOURCE_LABELS,
+  type CandidateSource,
+  type CandidateSources,
+} from "@/lib/barcode/candidate";
+import { EXPIRY_KINDS, EXPIRY_KIND_LABELS, hasExpiryDate } from "@/lib/inventory/operations";
 import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
 
 /**
@@ -19,6 +24,9 @@ import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
  *
  * 詳細位置は選んだ保管場所の配下だけを出す必要があるので、そこだけクライアントの状態を持つ。
  * 送信された値が不正だった場合は`useActionState`が入力値ごと返すので、打ち直しにならない。
+ *
+ * バーコードから来た欄には出所のチップを付ける（#9）。どこから来た値か分からないまま
+ * 埋まっていると、そのままでよいのか直すべきなのかを判断できない。
  */
 export interface StorageLocationOption {
   id: string;
@@ -50,6 +58,8 @@ export function StockLotForm({
   hidden = {},
   lockUnit = false,
   amountHint,
+  sources = {},
+  beforeFields,
 }: {
   action: (state: InventoryFormState, formData: FormData) => Promise<InventoryFormState>;
   operationId: string;
@@ -61,6 +71,10 @@ export function StockLotForm({
   hidden?: Record<string, string>;
   lockUnit?: boolean;
   amountHint?: string;
+  /** 欄ごとの候補の出所。バーコードから開いたときだけ渡る。 */
+  sources?: CandidateSources;
+  /** 入力欄の上に差し込む案内（バーコードの照合結果・付け替えの確認など）。 */
+  beforeFields?: ReactNode;
 }) {
   const [state, formAction, pending] = useActionState(action, EMPTY_FORM_STATE);
   const listId = useId();
@@ -74,8 +88,9 @@ export function StockLotForm({
   );
   const positions = locations.find((location) => location.id === locationId)?.positions ?? [];
 
+  // 既定は「未確認」。日付を入れずに登録したものは、期限内ではなく要確認として出す。
   const [expiryKind, setExpiryKind] = useState(
-    () => state.values.expiryKind ?? initial.expiryKind ?? "NONE",
+    () => state.values.expiryKind ?? initial.expiryKind ?? "UNKNOWN",
   );
 
   return (
@@ -94,8 +109,15 @@ export function StockLotForm({
         </p>
       ) : null}
 
+      {beforeFields ? <div className="px-4 pt-4 md:px-6">{beforeFields}</div> : null}
+
       <div className="flex flex-col gap-4 px-4 py-4 md:px-6">
-        <Field label="商品名" error={state.errors.productName} htmlFor="productName">
+        <Field
+          label="商品名"
+          error={state.errors.productName}
+          htmlFor="productName"
+          source={sources.productName}
+        >
           <Input
             id="productName"
             name="productName"
@@ -111,6 +133,7 @@ export function StockLotForm({
           error={state.errors.categoryName}
           htmlFor="categoryName"
           hint="未登録の名前を入れると、そのカテゴリを作ります。"
+          source={sources.categoryName}
         >
           <Input
             id="categoryName"
@@ -139,7 +162,7 @@ export function StockLotForm({
             />
           </Field>
 
-          <Field label="単位" error={state.errors.unit} htmlFor="unit">
+          <Field label="単位" error={state.errors.unit} htmlFor="unit" source={sources.unit}>
             {lockUnit ? (
               <>
                 <input type="hidden" name="unit" value={value("unit", "PIECE")} />
@@ -169,7 +192,12 @@ export function StockLotForm({
           </p>
         ) : (
           <div className="grid grid-cols-2 gap-3">
-            <Field label="保管場所" error={state.errors.storageLocationId} htmlFor="storageLocationId">
+            <Field
+              label="保管場所"
+              error={state.errors.storageLocationId}
+              htmlFor="storageLocationId"
+              source={sources.storageLocationId}
+            >
               <NativeSelect
                 id="storageLocationId"
                 name="storageLocationId"
@@ -189,6 +217,7 @@ export function StockLotForm({
               label="詳細位置"
               error={state.errors.storagePositionId}
               htmlFor="storagePositionId"
+              source={sources.storagePositionId}
             >
               <NativeSelect
                 id="storagePositionId"
@@ -209,7 +238,12 @@ export function StockLotForm({
         )}
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="期限" error={state.errors.expiryKind} htmlFor="expiryKind">
+          <Field
+            label="期限"
+            error={state.errors.expiryKind}
+            htmlFor="expiryKind"
+            source={sources.expiryKind}
+          >
             <NativeSelect
               id="expiryKind"
               name="expiryKind"
@@ -224,13 +258,18 @@ export function StockLotForm({
             </NativeSelect>
           </Field>
 
-          <Field label="日付" error={state.errors.expiryDate} htmlFor="expiryDate">
+          <Field
+            label="日付"
+            error={state.errors.expiryDate}
+            htmlFor="expiryDate"
+            source={sources.expiryDate}
+          >
             <Input
               id="expiryDate"
               name="expiryDate"
               type="date"
               defaultValue={value("expiryDate")}
-              disabled={expiryKind === "NONE"}
+              disabled={!hasExpiryDate(expiryKind as (typeof EXPIRY_KINDS)[number])}
               className="h-11 text-base"
             />
           </Field>
@@ -268,19 +307,24 @@ function Field({
   htmlFor,
   error,
   hint,
+  source,
   children,
 }: {
   label: string;
   htmlFor: string;
   error?: string;
   hint?: string;
+  source?: CandidateSource;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={htmlFor} className="text-xs font-semibold">
-        {label}
-      </Label>
+      <div className="flex items-center gap-2">
+        <Label htmlFor={htmlFor} className="text-xs font-semibold">
+          {label}
+        </Label>
+        {source ? <SourceChip source={source} /> : null}
+      </div>
       {children}
       {error ? (
         <p role="alert" className="text-destructive text-xs font-semibold">
@@ -290,6 +334,25 @@ function Field({
         <p className="text-muted-foreground text-xs">{hint}</p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * 値の出所。優先順位が高いものほど強い見た目にして、並べたときに順位が読めるようにする。
+ *
+ * 確定済みルール（自分が前回決めた値）＝塗り、バーコードマスタ＝枠線、AI候補＝破線。
+ */
+function SourceChip({ source }: { source: CandidateSource }) {
+  const style = {
+    RULE: "bg-foreground text-background font-semibold",
+    BARCODE: "text-foreground ring-1 ring-foreground",
+    AI: "text-muted-foreground ring-1 ring-dashed ring-border",
+  }[source];
+
+  return (
+    <span className={`rounded-full px-2 py-px text-[11px] leading-4 ${style}`}>
+      {CANDIDATE_SOURCE_LABELS[source]}
+    </span>
   );
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "stockly",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
   "scripts": {
@@ -19,14 +19,17 @@
     "db:seed:dev": "node scripts/seed-dev.mjs",
     "db:seed": "prisma db seed",
     "db:seed:fixture": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/fixtures/daily-inventory.ts",
+    "db:rebuild-quantities": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/rebuild-lot-quantities.ts",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "job:expiry": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-expiry-notifications.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "@supabase/ssr": "^0.12.6",
     "@supabase/supabase-js": "^2.115.0",
+    "barcode-detector": "^3.2.2",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.2.6",
     "lucide-react": "^1.42.0",

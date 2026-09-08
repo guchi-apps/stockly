@@ -114,6 +114,9 @@ jobs:
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
       ALLOWED_GOOGLE_EMAILS: ${{ secrets.ALLOWED_GOOGLE_EMAILS }}
       TARGET_DIR: ${{ secrets.TARGET_DIR }}
+      # Notion買い物リスト連携（#6）。未設定でもデプロイは通り、補充の送信だけができなくなる。
+      NOTION_API_TOKEN: ${{ secrets.NOTION_API_TOKEN }}
+      NOTION_SHOPPING_DATABASE_ID: ${{ secrets.NOTION_SHOPPING_DATABASE_ID }}
       SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
 
     steps:
@@ -194,6 +197,9 @@ jobs:
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
       ALLOWED_GOOGLE_EMAILS: ${{ secrets.ALLOWED_GOOGLE_EMAILS }}
       TARGET_DIR: ${{ secrets.TARGET_DIR }}
+      # Notion買い物リスト連携（#6）。未設定でもデプロイは通り、補充の送信だけができなくなる。
+      NOTION_API_TOKEN: ${{ secrets.NOTION_API_TOKEN }}
+      NOTION_SHOPPING_DATABASE_ID: ${{ secrets.NOTION_SHOPPING_DATABASE_ID }}
       SIGNALY_WEBHOOK_URL: ${{ secrets.SIGNALY_WEBHOOK_URL }}
 
     steps:
@@ -238,6 +244,8 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
           ALLOWED_GOOGLE_EMAILS: ${{ env.ALLOWED_GOOGLE_EMAILS }}
+          NOTION_API_TOKEN: ${{ env.NOTION_API_TOKEN }}
+          NOTION_SHOPPING_DATABASE_ID: ${{ env.NOTION_SHOPPING_DATABASE_ID }}
           TARGET_DIR: ${{ env.TARGET_DIR }}
         with:
           host: ${{ env.HOST }}
@@ -245,7 +253,7 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
           # ここに無い変数はSSH先に存在しない。env: と同じ名前を必ず並べる。
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,TARGET_DIR
+          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,NOTION_API_TOKEN,NOTION_SHOPPING_DATABASE_ID,TARGET_DIR
           script: |
             set -euo pipefail
             cd "${TARGET_DIR}"
@@ -273,6 +281,10 @@ jobs:
             update_env NEXT_PUBLIC_SUPABASE_URL "$NEXT_PUBLIC_SUPABASE_URL"
             update_env NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"
             update_env ALLOWED_GOOGLE_EMAILS "$ALLOWED_GOOGLE_EMAILS"
+            # Notionのsecretはまだ登録されていないことがある。`set -u`で落ちないよう既定を空にする
+            # （空のまま書けば、アプリ側は「未設定」として補充の送信だけを止める）。
+            update_env NOTION_API_TOKEN "${NOTION_API_TOKEN:-}"
+            update_env NOTION_SHOPPING_DATABASE_ID "${NOTION_SHOPPING_DATABASE_ID:-}"
 
             echo "Installing production dependencies..."
             corepack enable pnpm >/dev/null 2>&1 || true

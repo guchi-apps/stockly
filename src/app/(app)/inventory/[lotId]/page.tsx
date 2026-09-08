@@ -4,7 +4,7 @@ import { ArrowLeft, Pencil } from "lucide-react";
 
 import { recordTransactionAction } from "@/app/(app)/actions";
 import { ActionNotice, PageHeader, firstValue } from "@/components/inventory/chrome";
-import { ExpiryBadge, formatDate } from "@/components/inventory/expiry-badge";
+import { ExpiryBadge } from "@/components/inventory/expiry-badge";
 import { InventoryList } from "@/components/inventory/inventory-list";
 import { ReverseButton } from "@/components/inventory/record-form";
 import { SubmitButton } from "@/components/inventory/submit-button";
@@ -15,6 +15,7 @@ import { requireInventoryContext } from "@/lib/inventory/context";
 import { canReverse, formatQuantityWithUnit } from "@/lib/inventory/operations";
 import { getStockLotDetail } from "@/lib/inventory/queries";
 import { newOperationId } from "@/lib/inventory/service";
+import { formatTokyoDate } from "@/lib/time/tokyo";
 import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -107,7 +108,7 @@ export default async function StockLotPage({ params, searchParams }: PageProps<"
             {lot.expiry.date ? (
               <>
                 <dt className="text-muted-foreground">期限</dt>
-                <dd>{formatDate(lot.expiry.date)}</dd>
+                <dd>{formatTokyoDate(lot.expiry.date)}</dd>
               </>
             ) : null}
             {lot.note ? (
@@ -128,6 +129,16 @@ export default async function StockLotPage({ params, searchParams }: PageProps<"
           {lot.expiry.status === "EXPIRED" ? (
             <p className="text-muted-foreground text-xs leading-relaxed">
               期限切れのため、防災の備蓄量には算入されません（在庫としては残ります）。
+            </p>
+          ) : null}
+
+          {lot.expiry.status === "UNKNOWN" ? (
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              期限が入っていません。期限内かどうかを判断できないため、「要確認」として
+              <Link href="/expiry" className="underline underline-offset-2">
+                期限
+              </Link>
+              の画面に出ます。パッケージを見て「編集」から入れてください。
             </p>
           ) : null}
         </section>

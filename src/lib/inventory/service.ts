@@ -13,6 +13,8 @@
  */
 import { Prisma } from "@prisma/client";
 
+import { shelfLifeDaysBetween } from "@/lib/barcode/candidate";
+import type { BarcodeSymbology } from "@/lib/barcode/code";
 import { db } from "@/lib/db";
 import { scopeToHousehold } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
@@ -354,8 +356,23 @@ function assertNotStale(
 // 在庫（ロット）の登録・編集
 // ---------------------------------------------------------------------------
 
+/**
+ * 登録と同時に結び付けるバーコード（#9）。
+ *
+ * `rebind`は「このコードが別の商品に紐付いていたら、この商品へ付け替えてよいか」。
+ * 画面は既存の紐付けを見せたうえでチェックを取り、その意思をここへ渡す。
+ * 付け替えないまま別の商品として登録された回数は`mismatchCount`に積み、一覧で知らせる。
+ */
+export interface BarcodeLinkInput {
+  readonly code: string;
+  readonly symbology: BarcodeSymbology;
+  readonly source: "SCAN" | "MANUAL";
+  readonly rebind: boolean;
+}
+
 export interface CreateStockLotParams extends StockLotFormValue {
   readonly operationId: string;
+  readonly barcode?: BarcodeLinkInput | null;
 }
 
 /**
@@ -389,6 +406,7 @@ export async function createStockLot(
           unit: params.unit,
           bestBeforeDate: params.expiryKind === "BEST_BEFORE" ? params.expiryDate : null,
           useByDate: params.expiryKind === "USE_BY" ? params.expiryDate : null,
+          noExpiry: params.expiryKind === "NONE",
           openedAt: params.opened ? new Date() : null,
           note: params.note,
           status: "ACTIVE",
@@ -409,6 +427,18 @@ export async function createStockLot(
           occurredAt: new Date(),
           note: params.note,
         },
+      });
+
+      if (params.barcode) {
+        await applyBarcodeLink(tx, householdId, productId, params.productName, params.barcode);
+      }
+      await rememberProductRule(tx, householdId, productId, {
+        categoryId,
+        unit: params.unit,
+        storageLocationId: params.storageLocationId,
+        storagePositionId: params.storagePositionId,
+        expiryKind: params.expiryKind,
+        expiryDate: params.expiryDate,
       });
 
       return { status: "recorded" as const, lotId: lot.id, transactionId: params.operationId };
@@ -505,10 +535,22 @@ export async function updateStockLot(
           storagePositionId: params.storagePositionId,
           bestBeforeDate: params.expiryKind === "BEST_BEFORE" ? params.expiryDate : null,
           useByDate: params.expiryKind === "USE_BY" ? params.expiryDate : null,
+          noExpiry: params.expiryKind === "NONE",
           // すでに開封済みなら開封日時はそのまま残す（編集のたびに今日へ動かさない）。
           openedAt: params.opened ? (lot.openedAt ?? new Date()) : null,
           note: params.note,
         },
+      });
+
+      // 編集で直した値も「前回の確定」として覚え直す。登録のときだけ覚えると、
+      // 「登録してすぐ直した」場合に古いほうが候補として残り続ける。
+      await rememberProductRule(tx, householdId, lot.productId, {
+        categoryId,
+        unit: lot.unit,
+        storageLocationId: params.storageLocationId,
+        storagePositionId: params.storagePositionId,
+        expiryKind: params.expiryKind,
+        expiryDate: params.expiryDate,
       });
 
       return { status: "recorded" as const, lotId: lot.id, transactionId: params.operationId };
@@ -597,6 +639,225 @@ async function resolveProductId(
     if (!raced) throw error;
     return raced.id;
   }
+}
+
+// ---------------------------------------------------------------------------
+// バーコードと学習ルール（#9）
+// ---------------------------------------------------------------------------
+
+/**
+ * 商品ごとの「前回確定した内容」を覚え直す。
+ *
+ * バーコードから出す候補の最優先の材料で、登録・編集を確定するたびに上書きする。
+ * 期限は日付ではなく**日数**で覚える（日付を覚えると、次に買ったときには必ず過ぎている）。
+ *
+ * **期限が`UNKNOWN`（未確認）のときは期限まわりを上書きしない。** `UNKNOWN`は「まだ確かめていない」を
+ * 表す入力時点の状態であって確定した内容ではなく、`ProductRule.expiryKind`のDB上の型にも無い
+ * （#5で追加された値。カテゴリ・単位・保管場所はこの場合も確定しているので通常どおり覚える）。
+ */
+async function rememberProductRule(
+  tx: Prisma.TransactionClient,
+  householdId: string,
+  productId: string,
+  confirmed: {
+    categoryId: string | null;
+    unit: UnitCode;
+    storageLocationId: string | null;
+    storagePositionId: string | null;
+    expiryKind: ExpiryKind;
+    expiryDate: Date | null;
+  },
+): Promise<void> {
+  const now = new Date();
+
+  const values = {
+    categoryId: confirmed.categoryId,
+    unit: confirmed.unit,
+    storageLocationId: confirmed.storageLocationId,
+    storagePositionId: confirmed.storagePositionId,
+    ...(confirmed.expiryKind !== "UNKNOWN"
+      ? {
+          expiryKind: confirmed.expiryKind,
+          shelfLifeDays:
+            confirmed.expiryKind !== "NONE" && confirmed.expiryDate
+              ? shelfLifeDaysBetween(now, confirmed.expiryDate)
+              : null,
+        }
+      : {}),
+  };
+
+  await tx.productRule.upsert({
+    where: { householdId_productId: { householdId, productId } },
+    create: { householdId, productId, ...values, confirmedCount: 1, confirmedAt: now },
+    update: { ...values, confirmedCount: { increment: 1 }, confirmedAt: now },
+  });
+}
+
+/**
+ * コードと商品を結び付ける。
+ *
+ * 1つのコードは家庭内で1商品にしか紐付かないので、すでに別の商品に付いている場合は
+ * 「付け替える」か「食い違いを数えておく」のどちらかしかない。**黙って2件目を作らない。**
+ */
+async function applyBarcodeLink(
+  tx: Prisma.TransactionClient,
+  householdId: string,
+  productId: string,
+  productName: string,
+  link: BarcodeLinkInput,
+): Promise<void> {
+  const now = new Date();
+  const existing = await tx.barcode.findFirst({
+    where: { householdId, code: link.code },
+    select: { id: true, productId: true },
+  });
+
+  if (!existing) {
+    await tx.barcode.create({
+      data: {
+        householdId,
+        productId,
+        code: link.code,
+        symbology: link.symbology,
+        source: link.source,
+        useCount: 1,
+        lastUsedAt: now,
+      },
+    });
+    await rememberAlias(tx, householdId, productId, productName);
+    return;
+  }
+
+  if (existing.productId === productId) {
+    // 読み取ってそのまま登録できた＝紐付けは正しい。疑いの数え直しもここで戻す。
+    await tx.barcode.update({
+      where: { id: existing.id },
+      data: { useCount: { increment: 1 }, lastUsedAt: now, mismatchCount: 0 },
+    });
+    return;
+  }
+
+  if (link.rebind) {
+    await tx.barcode.update({
+      where: { id: existing.id },
+      data: {
+        productId,
+        symbology: link.symbology,
+        source: link.source,
+        useCount: 1,
+        lastUsedAt: now,
+        mismatchCount: 0,
+      },
+    });
+    await rememberAlias(tx, householdId, productId, productName);
+    return;
+  }
+
+  // 付け替えないと決めた場合。在庫の登録は通し、食い違いだけ数えておく。
+  await tx.barcode.update({
+    where: { id: existing.id },
+    data: { mismatchCount: { increment: 1 } },
+  });
+}
+
+/**
+ * コードで登録したときの商品名を別名として残す。
+ *
+ * あとで商品名を変えても、この別名で在庫を探せる（`queries.ts`の検索が別名も見る）。
+ * **他の商品がすでに使っている別名は奪わない。** 別名は家庭内で一意で、
+ * 1つの別名が複数の商品を指すと、どちらの商品か決められなくなる。
+ */
+async function rememberAlias(
+  tx: Prisma.TransactionClient,
+  householdId: string,
+  productId: string,
+  alias: string,
+): Promise<void> {
+  const name = alias.trim();
+  if (name === "") return;
+
+  const existing = await tx.productAlias.findFirst({
+    where: { householdId, alias: name },
+    select: { id: true },
+  });
+  if (existing) return;
+
+  try {
+    await tx.productAlias.create({
+      data: { householdId, productId, alias: name, source: "BARCODE" },
+    });
+  } catch (error) {
+    // 同じ別名が同時に作られただけなら、先に入ったほうを使う（別名は付加情報で、
+    // ここで登録そのものを失敗させる理由がない）。
+    if (!isUniqueViolation(error)) throw error;
+  }
+}
+
+/** コードの紐付けを別の商品へ付け替える。誤って紐付いたコードを直す唯一の手段。 */
+export async function rebindBarcode(
+  ctx: InventoryContext,
+  params: { barcodeId: string; productId: string },
+): Promise<void> {
+  const householdId = await scope(ctx);
+
+  const barcode = await db.barcode.findFirst({
+    where: { id: params.barcodeId, householdId },
+    select: { id: true, code: true },
+  });
+  if (!barcode) throw new InventoryNotFoundError("このバーコードは見つかりませんでした。");
+
+  const product = await db.product.findFirst({
+    where: { id: params.productId, householdId },
+    select: { id: true, name: true },
+  });
+  if (!product) {
+    throw new InventoryInputError("productId", "付け替え先の商品を選んでください。");
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.barcode.update({
+      where: { id: barcode.id },
+      data: { productId: product.id, useCount: 0, lastUsedAt: null, mismatchCount: 0 },
+    });
+    await rememberAlias(tx, householdId, product.id, product.name);
+  });
+}
+
+/**
+ * コードの紐付けを外す。商品と在庫はそのまま残る。
+ *
+ * 次に同じコードを読むと未登録として扱われ、新しい商品として登録し直せる。
+ */
+export async function unlinkBarcode(
+  ctx: InventoryContext,
+  params: { barcodeId: string },
+): Promise<{ code: string }> {
+  const householdId = await scope(ctx);
+
+  const barcode = await db.barcode.findFirst({
+    where: { id: params.barcodeId, householdId },
+    select: { id: true, code: true },
+  });
+  if (!barcode) throw new InventoryNotFoundError("このバーコードは見つかりませんでした。");
+
+  await db.barcode.delete({ where: { id: barcode.id } });
+  return { code: barcode.code };
+}
+
+/** 誤紐付けの疑いを「そのままでよい」と決める。数え直しを0へ戻すだけ。 */
+export async function dismissBarcodeMismatch(
+  ctx: InventoryContext,
+  params: { barcodeId: string },
+): Promise<void> {
+  const householdId = await scope(ctx);
+
+  const barcode = await db.barcode.findFirst({
+    where: { id: params.barcodeId, householdId },
+    select: { id: true },
+  });
+  if (!barcode) throw new InventoryNotFoundError("このバーコードは見つかりませんでした。");
+
+  await db.barcode.update({ where: { id: barcode.id }, data: { mismatchCount: 0 } });
 }
 
 // ---------------------------------------------------------------------------
@@ -755,7 +1016,15 @@ export async function deleteStorageLocation(
     );
   }
 
-  await db.storageLocation.delete({ where: { id: location.id } });
+  await db.$transaction(async (tx) => {
+    // 学習ルールが覚えている置き場所は、場所が無くなれば意味を失う。外部キーがRestrictなので、
+    // 先に外さないと削除がDBで弾かれる（利用者には「なぜ消せないのか」が伝わらない）。
+    await tx.productRule.updateMany({
+      where: { householdId, storageLocationId: location.id },
+      data: { storageLocationId: null, storagePositionId: null },
+    });
+    await tx.storageLocation.delete({ where: { id: location.id } });
+  });
 }
 
 export async function deleteStoragePosition(
@@ -777,5 +1046,12 @@ export async function deleteStoragePosition(
     );
   }
 
-  await db.storagePosition.delete({ where: { id: position.id } });
+  await db.$transaction(async (tx) => {
+    // 保管場所の削除と同じ理由で、学習ルールの参照を先に外す（#9）。
+    await tx.productRule.updateMany({
+      where: { householdId, storagePositionId: position.id },
+      data: { storagePositionId: null },
+    });
+    await tx.storagePosition.delete({ where: { id: position.id } });
+  });
 }

@@ -12,6 +12,12 @@
  * - 未開封の水10L（2L×5本）と、飲みかけ1本
  * - カップ麺2個
  * - 期限切れのサトウのごはん4パック
+ * - バーコード4件と、そのうち3件ぶんの学習ルール（#9）。1件は誤紐付けの疑いが立った状態にしてある
+ *
+ * 防災の判定（#7）を画面で確かめられるよう、6区分（食料・飲料・衛生・照明・電源・熱源）が
+ * すべて埋まる分だけの在庫と、**除外の理由が1件ずつ出る在庫**も入れてある
+ * （期限切れ＝サトウのごはん、冷蔵＝牛乳、開封済み＝飲みかけの水、換算できない＝
+ * トイレットペーパー、期限が要確認＝ウェットティッシュ）。
  *
  * 期限は**流した日からの相対**で入れる。固定日にすると、日が経つほど「期限切れ」「期限間近」
  * 「余裕あり」の3状態が揃わなくなり、確認用としての意味が薄れるため。
@@ -77,6 +83,15 @@ const LOCATIONS = [
     positions: [],
   },
   {
+    // 冷蔵の在庫が防災の日数に数えられないこと（#7）を確かめるための場所。
+    id: "fx-location-fridge",
+    name: "冷蔵庫",
+    kind: "REFRIGERATOR" as const,
+    temperatureZone: "CHILLED" as const,
+    sortOrder: 24,
+    positions: [],
+  },
+  {
     id: "fx-location-pantry",
     name: "食品棚",
     kind: "PANTRY" as const,
@@ -98,6 +113,8 @@ interface FixtureProduct {
   contentUnit?: UnitCode;
   servingsPerUnit?: string;
   usesPerUnit?: string;
+  /** 保管に必要な温度帯。既定は常温。冷蔵・冷凍は防災の日数に数えない（#7）。 */
+  temperatureZone?: "AMBIENT" | "CHILLED" | "FROZEN";
   requiresHeating?: boolean;
   requiresWater?: boolean;
   emergencyRole?:
@@ -108,6 +125,8 @@ interface FixtureProduct {
     | "UTILITY_WATER"
     | "HEAT_SOURCE"
     | "SANITATION"
+    | "LIGHTING"
+    | "POWER"
     | "MEDICAL"
     | "OTHER";
   note?: string;
@@ -157,7 +176,9 @@ const PRODUCTS: FixtureProduct[] = [
     id: "fx-product-garbage-bag",
     categoryId: "fx-category-daily",
     name: "ゴミ袋 45L",
-    defaultUnit: "PIECE",
+    // 袋は「個」ではなく「袋」で数える。衛生の判定単位（回）へは換算できないため、
+    // 防災の集計では「換算できない」として外れる（#8の点検画面でその例になっている）。
+    defaultUnit: "BAG",
     emergencyRole: "SANITATION",
   },
   {
@@ -165,7 +186,35 @@ const PRODUCTS: FixtureProduct[] = [
     categoryId: "fx-category-emergency",
     name: "小型ライト",
     defaultUnit: "PIECE",
-    emergencyRole: "OTHER",
+    emergencyRole: "LIGHTING",
+  },
+  {
+    id: "fx-product-power-bank",
+    categoryId: "fx-category-emergency",
+    name: "モバイルバッテリー",
+    defaultUnit: "PIECE",
+    emergencyRole: "POWER",
+  },
+  {
+    // 1本で1回ぶんの調理をまかなう想定。熱源があるとカップ麺が食料に数えられる（#7）。
+    id: "fx-product-gas-canister",
+    categoryId: "fx-category-emergency",
+    name: "カセットボンベ",
+    defaultUnit: "BOTTLE",
+    usesPerUnit: "1",
+    emergencyRole: "HEAT_SOURCE",
+  },
+  {
+    // 冷蔵品。停電で使えなくなる前提なので、防災の日数には数えない（#7）。
+    id: "fx-product-milk",
+    categoryId: "fx-category-food",
+    name: "牛乳 1L",
+    defaultUnit: "BOTTLE",
+    contentAmount: "1000",
+    contentUnit: "MILLILITER",
+    servingsPerUnit: "2",
+    temperatureZone: "CHILLED",
+    emergencyRole: "SIDE_DISH",
   },
   {
     id: "fx-product-water",
@@ -204,6 +253,8 @@ interface FixtureLot {
   storagePositionId?: string;
   unit: UnitCode;
   bestBeforeDays?: number;
+  /** 「この在庫に期限は無い」と決めたもの。期限を入れ忘れた在庫（要確認）と分けるため（#5）。 */
+  noExpiry?: boolean;
   openedHoursAgo?: number;
   note?: string;
   transactions: {
@@ -215,6 +266,117 @@ interface FixtureLot {
   }[];
 }
 
+interface FixtureBarcode {
+  id: string;
+  code: string;
+  symbology: "JAN" | "EAN8";
+  productId: string;
+  source: "SCAN" | "MANUAL";
+  useCount: number;
+  lastUsedHoursAgo: number;
+  /** 読み取ったのに別商品として登録された回数。3以上で誤紐付けの疑いとして先頭に出る。 */
+  mismatchCount?: number;
+}
+
+/**
+ * バーコード（#9）。チェックディジットまで正しい値にしてある。
+ *
+ * 画面の手入力欄は不正なコードを弾くので、ここに合わない値を置くと
+ * 「fixtureにはあるのに手で入れ直せない」コードができてしまう。
+ */
+const BARCODES: FixtureBarcode[] = [
+  {
+    id: "fx-barcode-water",
+    code: "4901777018884",
+    symbology: "JAN",
+    productId: "fx-product-water",
+    source: "SCAN",
+    useCount: 4,
+    lastUsedHoursAgo: 24 * 3,
+  },
+  {
+    id: "fx-barcode-cup-noodle",
+    code: "4907773010419",
+    symbology: "JAN",
+    productId: "fx-product-cup-noodle",
+    source: "SCAN",
+    useCount: 2,
+    lastUsedHoursAgo: 24 * 12,
+  },
+  {
+    // 誤紐付けの疑い。読み取ったあと毎回別の商品として登録された状態。
+    id: "fx-barcode-packed-rice",
+    code: "4940257101920",
+    symbology: "JAN",
+    productId: "fx-product-packed-rice",
+    source: "SCAN",
+    useCount: 1,
+    lastUsedHoursAgo: 24 * 30,
+    mismatchCount: 3,
+  },
+  {
+    id: "fx-barcode-toilet-paper",
+    code: "45690228",
+    symbology: "EAN8",
+    productId: "fx-product-toilet-paper",
+    source: "MANUAL",
+    useCount: 1,
+    lastUsedHoursAgo: 24 * 40,
+  },
+];
+
+interface FixtureRule {
+  id: string;
+  productId: string;
+  categoryId: string;
+  unit: UnitCode;
+  storageLocationId: string;
+  storagePositionId?: string;
+  expiryKind: "NONE" | "BEST_BEFORE" | "USE_BY";
+  shelfLifeDays?: number;
+  confirmedCount: number;
+}
+
+/**
+ * 学習ルール（#9）。「前回この商品をどう登録したか」を表す。
+ *
+ * 読み取り後の登録画面で、どの欄が「前回の確定」として埋まるかを確かめるためのもの。
+ * 期限は日数で持つので、いつ流しても次回の既定日が今日からの相対になる。
+ */
+const PRODUCT_RULES: FixtureRule[] = [
+  {
+    id: "fx-rule-water",
+    productId: "fx-product-water",
+    categoryId: "fx-category-drink",
+    unit: "BOTTLE",
+    storageLocationId: "fx-location-pantry",
+    storagePositionId: "fx-position-pantry-floor",
+    expiryKind: "BEST_BEFORE",
+    shelfLifeDays: 730,
+    confirmedCount: 4,
+  },
+  {
+    id: "fx-rule-cup-noodle",
+    productId: "fx-product-cup-noodle",
+    categoryId: "fx-category-food",
+    unit: "PIECE",
+    storageLocationId: "fx-location-pantry",
+    storagePositionId: "fx-position-pantry-upper",
+    expiryKind: "BEST_BEFORE",
+    shelfLifeDays: 180,
+    confirmedCount: 2,
+  },
+  {
+    id: "fx-rule-toilet-paper",
+    productId: "fx-product-toilet-paper",
+    categoryId: "fx-category-daily",
+    unit: "ROLL",
+    storageLocationId: "fx-location-emergency-bag",
+    expiryKind: "NONE",
+    confirmedCount: 1,
+  },
+];
+
 const LOTS: FixtureLot[] = [
   {
     id: "fx-lot-emergency-bag",
@@ -222,6 +384,7 @@ const LOTS: FixtureLot[] = [
     storageLocationId: "fx-location-entrance",
     storagePositionId: "fx-position-entrance-upper",
     unit: "PIECE",
+    noExpiry: true,
     note: "玄関収納の上段。中身は保管場所「防災バッグ」を見る",
     transactions: [
       { id: "fx-tx-emergency-bag-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 400 },
@@ -229,10 +392,14 @@ const LOTS: FixtureLot[] = [
   },
   {
     // 使いかけのロールを0.4として持つ。小数の在庫が扱えることの確認を兼ねる。
+    // 学習ルール（fx-rule-toilet-paper）で「期限なし」と確定済みの商品なので、
+    // ロット側もnoExpiryにする。ここが空だと「期限を入れ忘れた在庫（要確認）」として
+    // 数えられ、防災バッグの点検で開封済みの例が1件も出なくなる（#8）。
     id: "fx-lot-toilet-paper",
     productId: "fx-product-toilet-paper",
     storageLocationId: "fx-location-emergency-bag",
     unit: "ROLL",
+    noExpiry: true,
     openedHoursAgo: 24 * 30,
     transactions: [
       { id: "fx-tx-toilet-paper-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 60 },
@@ -269,6 +436,7 @@ const LOTS: FixtureLot[] = [
     productId: "fx-product-duct-tape",
     storageLocationId: "fx-location-emergency-bag",
     unit: "PIECE",
+    noExpiry: true,
     transactions: [
       { id: "fx-tx-duct-tape-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 200 },
     ],
@@ -277,7 +445,8 @@ const LOTS: FixtureLot[] = [
     id: "fx-lot-garbage-bag",
     productId: "fx-product-garbage-bag",
     storageLocationId: "fx-location-emergency-bag",
-    unit: "PIECE",
+    unit: "BAG",
+    noExpiry: true,
     note: "3枚",
     transactions: [
       { id: "fx-tx-garbage-bag-1", type: "PURCHASE", quantityDelta: "3", hoursAgo: 24 * 200 },
@@ -288,8 +457,42 @@ const LOTS: FixtureLot[] = [
     productId: "fx-product-flashlight",
     storageLocationId: "fx-location-emergency-bag",
     unit: "PIECE",
+    noExpiry: true,
     transactions: [
       { id: "fx-tx-flashlight-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 400 },
+    ],
+  },
+  {
+    id: "fx-lot-power-bank",
+    productId: "fx-product-power-bank",
+    storageLocationId: "fx-location-emergency-bag",
+    unit: "PIECE",
+    noExpiry: true,
+    transactions: [
+      { id: "fx-tx-power-bank-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 300 },
+    ],
+  },
+  {
+    id: "fx-lot-gas-canister",
+    productId: "fx-product-gas-canister",
+    storageLocationId: "fx-location-pantry",
+    storagePositionId: "fx-position-pantry-floor",
+    unit: "BOTTLE",
+    bestBeforeDays: 365 * 5,
+    note: "3本 = 3回ぶん",
+    transactions: [
+      { id: "fx-tx-gas-canister-1", type: "PURCHASE", quantityDelta: "3", hoursAgo: 24 * 90 },
+    ],
+  },
+  {
+    // 期限内でも冷蔵なので、防災の日数には数えない（#7）。
+    id: "fx-lot-milk",
+    productId: "fx-product-milk",
+    storageLocationId: "fx-location-fridge",
+    unit: "BOTTLE",
+    bestBeforeDays: 4,
+    transactions: [
+      { id: "fx-tx-milk-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 2 },
     ],
   },
   {
@@ -357,7 +560,55 @@ const LOTS: FixtureLot[] = [
  * 取消（REVERSAL）行は他の履歴を外部キーで参照しているため、先に消す。
  * まとめて消すと、同じDELETE文の中で参照先が先に消えて制約違反になりうる。
  */
+/**
+ * 補充基準（#6）。商品ごと・カテゴリごとの両方を入れて、補充の画面で
+ * 「不足あり」「足りている」「換算できない在庫がある」を一度に見られるようにする。
+ *
+ * - トイレットペーパーは0.4ロールしかないので候補に出る（商品ごとの基準）
+ * - 飲料はカテゴリ合計で判定する。水は2L×5本＋飲みかけで、Lへ換算して数える
+ * - カップ麺は2個。期限切れのサトウのごはんは数えないので、こちらも候補に出る
+ */
+const REPLENISHMENT_RULES = [
+  {
+    id: "fx-rule-toilet-paper",
+    productId: "fx-product-toilet-paper",
+    categoryId: null,
+    thresholdAmount: "2",
+    targetAmount: "12",
+    unit: "ROLL" as UnitCode,
+  },
+  {
+    id: "fx-rule-drink",
+    productId: null,
+    categoryId: "fx-category-drink",
+    thresholdAmount: "20",
+    targetAmount: "36",
+    unit: "LITER" as UnitCode,
+  },
+  {
+    id: "fx-rule-cup-noodle",
+    productId: "fx-product-cup-noodle",
+    categoryId: null,
+    thresholdAmount: "3",
+    targetAmount: "6",
+    unit: "PIECE" as UnitCode,
+  },
+];
+
 async function resetFixtureRows(): Promise<void> {
+  // バーコードと学習ルール（#9）は在庫に依存しないので、ロットの有無にかかわらず作り直す。
+  await prisma.barcode.deleteMany({
+    where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-barcode-" } },
+  });
+  await prisma.productRule.deleteMany({
+    where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-rule-" } },
+  });
+  // 補充基準は「対象ごとに1件」なので、作り直す前に必ず消す（idが違う同じ対象の基準が
+  // 残っていると、下のcreateが一意制約で落ちる）。
+  await prisma.replenishmentRule.deleteMany({
+    where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-rule-" } },
+  });
+
   const lots = await prisma.stockLot.findMany({
     where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-lot-" } },
     select: { id: true },
@@ -466,6 +717,7 @@ async function main(): Promise<void> {
       bestBeforeDate:
         lot.bestBeforeDays === undefined ? null : daysFromToday(lot.bestBeforeDays),
       useByDate: null,
+      noExpiry: lot.noExpiry ?? false,
       openedAt: lot.openedHoursAgo === undefined ? null : hoursAgo(lot.openedHoursAgo),
       note: lot.note ?? null,
       status: quantity.greaterThan(new Decimal(0)) ? ("ACTIVE" as const) : ("DEPLETED" as const),
@@ -498,8 +750,71 @@ async function main(): Promise<void> {
     }
   }
 
+  for (const barcode of BARCODES) {
+    await prisma.barcode.create({
+      data: {
+        id: barcode.id,
+        householdId: HOUSEHOLD_ID,
+        productId: productIds.get(barcode.productId) as string,
+        code: barcode.code,
+        symbology: barcode.symbology,
+        source: barcode.source,
+        useCount: barcode.useCount,
+        lastUsedAt: hoursAgo(barcode.lastUsedHoursAgo),
+        mismatchCount: barcode.mismatchCount ?? 0,
+      },
+    });
+  }
+
+  for (const rule of PRODUCT_RULES) {
+    await prisma.productRule.create({
+      data: {
+        id: rule.id,
+        householdId: HOUSEHOLD_ID,
+        productId: productIds.get(rule.productId) as string,
+        categoryId: categoryIds.get(rule.categoryId) ?? null,
+        unit: rule.unit,
+        storageLocationId: locationIds.get(rule.storageLocationId) as string,
+        storagePositionId: rule.storagePositionId
+          ? (positionIds.get(rule.storagePositionId) as string)
+          : null,
+        expiryKind: rule.expiryKind,
+        shelfLifeDays: rule.shelfLifeDays ?? null,
+        confirmedCount: rule.confirmedCount,
+        confirmedAt: hoursAgo(24),
+      },
+    });
+  }
+
+  for (const rule of REPLENISHMENT_RULES) {
+    const productId = rule.productId ? (productIds.get(rule.productId) as string) : null;
+    const categoryId = rule.categoryId ? (categoryIds.get(rule.categoryId) as string) : null;
+
+    // 画面から同じ対象の基準を作っていた場合は、そちらを消してから入れ直す。
+    await prisma.replenishmentRule.deleteMany({
+      where: {
+        householdId: HOUSEHOLD_ID,
+        ...(productId ? { productId } : { categoryId }),
+      },
+    });
+
+    await prisma.replenishmentRule.create({
+      data: {
+        id: rule.id,
+        householdId: HOUSEHOLD_ID,
+        productId,
+        categoryId,
+        thresholdAmount: new Decimal(rule.thresholdAmount),
+        targetAmount: new Decimal(rule.targetAmount),
+        unit: rule.unit,
+      },
+    });
+  }
+
   console.log(
-    `fixture投入完了: 保管場所 ${LOCATIONS.length}件 / 商品 ${PRODUCTS.length}件 / 在庫 ${LOTS.length}件`,
+    `fixture投入完了: 保管場所 ${LOCATIONS.length}件 / 商品 ${PRODUCTS.length}件 / ` +
+      `在庫 ${LOTS.length}件 / バーコード ${BARCODES.length}件 / 学習ルール ${PRODUCT_RULES.length}件 / ` +
+      `補充基準 ${REPLENISHMENT_RULES.length}件`,
   );
 }
 

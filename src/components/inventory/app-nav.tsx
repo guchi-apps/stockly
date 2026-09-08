@@ -1,32 +1,46 @@
 "use client";
 
+import type { ComponentType } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, History, MapPin } from "lucide-react";
 import { cn } from "cn";
 
+import { BOTTOM_ITEMS, ITEMS } from "./nav-items";
+
 /**
- * 在庫まわりの行き先。PCでは左の列、スマホでは画面下のタブとして同じ内容を出す。
+ * 在庫まわりのナビ。行き先の定義そのものは`nav-items.ts`にある
+ * （このファイルは`"use client"`のため、サーバーコンポーネントから配列を読めない）。
  *
  * 現在地の判定にパスが要るためクライアントコンポーネントにしてある。
+ * `/inventory/scan`は「在庫」の下にあるが行き先としては「読取」なので、
+ * **前方一致の長いものを優先して選ぶ**（単純な先頭一致だと、読取の画面で「在庫」が光る）。
  */
-const ITEMS = [
-  { href: "/inventory", label: "在庫", icon: Boxes },
-  { href: "/history", label: "履歴", icon: History },
-  { href: "/storage", label: "保管場所", icon: MapPin },
-] as const;
-
-function useCurrent(): string {
-  const pathname = usePathname();
-  const match = ITEMS.find(
-    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
-  );
-  return match?.href ?? "";
+interface NavEntry {
+  readonly href: string;
+  readonly label: string;
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly matches: readonly string[];
 }
 
-/** PC・iPad用の縦のナビ。 */
+function useCurrent(items: readonly NavEntry[]): string {
+  const pathname = usePathname();
+
+  let current = "";
+  let longest = 0;
+  for (const item of items) {
+    for (const prefix of item.matches) {
+      if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) continue;
+      if (prefix.length <= longest) continue;
+      current = item.href;
+      longest = prefix.length;
+    }
+  }
+  return current;
+}
+
+/** PC・iPad用の縦のナビ。全項目を並べる。 */
 export function SideNav() {
-  const current = useCurrent();
+  const current = useCurrent(ITEMS);
 
   return (
     <nav className="flex flex-col gap-1">
@@ -53,15 +67,16 @@ export function SideNav() {
 /**
  * スマホ用の下タブ。
  *
- * 片手で押せる位置に主要な行き先を置く。`pb-[env(safe-area-inset-bottom)]`は、
- * ホーム画面から起動したときにホームバーへ潜り込ませないため。
+ * 片手で押せる位置に主要な行き先を置き、5つ目を「メニュー」にしてそれ以外の行き先を渡す。
+ * `pb-[env(safe-area-inset-bottom)]`は、ホーム画面から起動したときにホームバーへ
+ * 潜り込ませないため。
  */
 export function BottomNav() {
-  const current = useCurrent();
+  const current = useCurrent(BOTTOM_ITEMS);
 
   return (
-    <nav className="bg-background/95 fixed inset-x-0 bottom-0 z-20 grid grid-cols-3 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-      {ITEMS.map(({ href, label, icon: Icon }) => (
+    <nav className="bg-background/95 fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
+      {BOTTOM_ITEMS.map(({ href, label, icon: Icon }) => (
         <Link
           key={href}
           href={href}

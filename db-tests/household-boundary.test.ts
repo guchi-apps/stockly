@@ -3,12 +3,10 @@
  * 実際に効いていることを確認する（#18）。単一列の外部キーへ書き換えるような変更は
  * 純関数の単体テストでは検出できないため、実際のMySQL/MariaDBへINSERTして確かめる。
  */
-import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-import { Prisma } from "@prisma/client";
-
 import {
+  assertRejectedByDatabase,
   createHousehold,
   createProduct,
   createStorageLocation,
@@ -26,10 +24,6 @@ after(async () => {
   await prisma.$disconnect();
 });
 
-function isForeignKeyViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003";
-}
-
 test("他家庭の商品を参照するStockLotはINSERTできない", async () => {
   const owner = await createHousehold("db-test household（商品の所有側）");
   const intruder = await createHousehold("db-test household（越境しようとする側）");
@@ -37,12 +31,12 @@ test("他家庭の商品を参照するStockLotはINSERTできない", async () 
 
   const product = await createProduct(owner.id, "商品");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.stockLot.create({
         data: { householdId: intruder.id, productId: product.id, unit: "PIECE" },
       }),
-    isForeignKeyViolation,
+    () => prisma.stockLot.count({ where: { householdId: intruder.id } }),
   );
 });
 
@@ -54,7 +48,7 @@ test("他家庭の保管場所を参照するStockLotはINSERTできない", asy
   const product = await createProduct(intruder.id, "商品");
   const storageLocation = await createStorageLocation(owner.id, "保管場所");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.stockLot.create({
         data: {
@@ -64,7 +58,7 @@ test("他家庭の保管場所を参照するStockLotはINSERTできない", asy
           unit: "PIECE",
         },
       }),
-    isForeignKeyViolation,
+    () => prisma.stockLot.count({ where: { householdId: intruder.id } }),
   );
 });
 
@@ -78,7 +72,7 @@ test("指定した保管場所の配下にないStoragePositionを参照するSt
   // 同じ家庭内だが、locationBの配下にある詳細位置。
   const positionUnderB = await createStoragePosition(household.id, locationB.id, "位置B-1");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.stockLot.create({
         data: {
@@ -90,6 +84,81 @@ test("指定した保管場所の配下にないStoragePositionを参照するSt
           unit: "PIECE",
         },
       }),
-    isForeignKeyViolation,
+    () => prisma.stockLot.count({ where: { householdId: household.id } }),
   );
+});
+
+// --- 入出庫履歴（InventoryTransaction）の越境（#13） ---
+//
+// 在庫を変える処理は`service.ts`が`scopeToHousehold()`で得た`householdId`しか使わないが、
+// そこを迂回した書き込み（直接SQL・別経路のバグ）が他家庭のロットや記録者を指せないことを、
+// 複合外部キーでDB側にも担保させている。IDOR（他家庭のidを渡す）の最後の砦にあたる。
+
+test("他家庭のロットを参照するInventoryTransactionはINSERTできない", async () => {
+  const owner = await createHousehold("db-test household（ロットの所有側）");
+  const intruder = await createHousehold("db-test household（他家庭のロットへ記録しようとする側）");
+  createdHouseholdIds.push(owner.id, intruder.id);
+
+  const ownerProduct = await createProduct(owner.id, "商品");
+  const ownerLot = await prisma.stockLot.create({
+    data: { householdId: owner.id, productId: ownerProduct.id, unit: "PIECE" },
+  });
+  const intruderProduct = await createProduct(intruder.id, "商品");
+
+  await assertRejectedByDatabase(
+    () =>
+      prisma.inventoryTransaction.create({
+        data: {
+          householdId: intruder.id,
+          stockLotId: ownerLot.id,
+          productId: intruderProduct.id,
+          type: "CONSUME",
+          quantityDelta: "-1",
+          unit: "PIECE",
+          occurredAt: new Date(),
+        },
+      }),
+    () => prisma.inventoryTransaction.count({ where: { householdId: intruder.id } }),
+  );
+});
+
+test("他家庭のメンバーを記録者にしたInventoryTransactionはINSERTできない", async () => {
+  const owner = await createHousehold("db-test household（記録先）");
+  const other = await createHousehold("db-test household（メンバーの所属先）");
+  createdHouseholdIds.push(owner.id, other.id);
+
+  const user = await prisma.user.create({
+    data: { supabaseUserId: `db-test-${owner.id}`, name: "db-test user" },
+  });
+  const otherMember = await prisma.householdMember.create({
+    data: { householdId: other.id, userId: user.id },
+  });
+
+  const product = await createProduct(owner.id, "商品");
+  const lot = await prisma.stockLot.create({
+    data: { householdId: owner.id, productId: product.id, unit: "PIECE" },
+  });
+
+  try {
+    await assertRejectedByDatabase(
+      () =>
+        prisma.inventoryTransaction.create({
+          data: {
+            householdId: owner.id,
+            stockLotId: lot.id,
+            productId: product.id,
+            memberId: otherMember.id,
+            type: "PURCHASE",
+            quantityDelta: "1",
+            unit: "PIECE",
+            occurredAt: new Date(),
+          },
+        }),
+      () => prisma.inventoryTransaction.count({ where: { householdId: owner.id } }),
+    );
+  } finally {
+    // Userは家庭のCascadeでは消えないので、ここで消す（所属は家庭ごと消える）。
+    await prisma.householdMember.deleteMany({ where: { userId: user.id } });
+    await prisma.user.delete({ where: { id: user.id } });
+  }
 });
