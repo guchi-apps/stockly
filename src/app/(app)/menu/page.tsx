@@ -40,7 +40,7 @@ export default async function MenuPage() {
       <PageHeader title="メニュー" description={householdName ?? undefined} />
 
       <div className="flex flex-col gap-5 px-4 py-4 md:px-6">
-        <MenuGroup title="在庫を動かす">
+        <MenuGroup title="そのほかの画面">
           {OVERFLOW_ITEMS.map(({ href, label, note, icon: Icon }) => (
             <MenuLink key={href} href={href} label={label} note={note} icon={<Icon />} />
           ))}

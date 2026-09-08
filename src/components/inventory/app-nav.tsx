@@ -1,5 +1,6 @@
 "use client";
 
+import type { ComponentType } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "cn";
@@ -9,19 +10,37 @@ import { BOTTOM_ITEMS, ITEMS } from "./nav-items";
 /**
  * 在庫まわりのナビ。行き先の定義そのものは`nav-items.ts`にある
  * （このファイルは`"use client"`のため、サーバーコンポーネントから配列を読めない）。
+ *
+ * 現在地の判定にパスが要るためクライアントコンポーネントにしてある。
+ * `/inventory/scan`は「在庫」の下にあるが行き先としては「読取」なので、
+ * **前方一致の長いものを優先して選ぶ**（単純な先頭一致だと、読取の画面で「在庫」が光る）。
  */
-function isCurrent(pathname: string, href: string): boolean {
-  return pathname === href || pathname.startsWith(`${href}/`);
+interface NavEntry {
+  readonly href: string;
+  readonly label: string;
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly matches: readonly string[];
 }
 
-function useCurrent(hrefs: readonly string[]): string {
+function useCurrent(items: readonly NavEntry[]): string {
   const pathname = usePathname();
-  return hrefs.find((href) => isCurrent(pathname, href)) ?? "";
+
+  let current = "";
+  let longest = 0;
+  for (const item of items) {
+    for (const prefix of item.matches) {
+      if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) continue;
+      if (prefix.length <= longest) continue;
+      current = item.href;
+      longest = prefix.length;
+    }
+  }
+  return current;
 }
 
 /** PC・iPad用の縦のナビ。全項目を並べる。 */
 export function SideNav() {
-  const current = useCurrent(ITEMS.map((item) => item.href));
+  const current = useCurrent(ITEMS);
 
   return (
     <nav className="flex flex-col gap-1">
@@ -53,7 +72,7 @@ export function SideNav() {
  * 潜り込ませないため。
  */
 export function BottomNav() {
-  const current = useCurrent(BOTTOM_ITEMS.map((item) => item.href));
+  const current = useCurrent(BOTTOM_ITEMS);
 
   return (
     <nav className="bg-background/95 fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
