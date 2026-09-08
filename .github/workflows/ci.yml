@@ -64,6 +64,13 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder
 
+      # 本番ビルドを実際に起動し、開発用ログイン（POST /api/dev/login）が閉じていること・
+      # 未ログインが/loginへ戻ることをHTTPで確かめる（#13）。関数単位の単体テストでは
+      # 配線の間違い（別経路の判定・NODE_ENVの固定漏れ）を見つけられないため。
+      # 外部サービスには接続しない（スクリプトがビルド時と同じプレースホルダーを渡す）。
+      - name: Production smoke (dev login disabled)
+        run: bash scripts/check-dev-login-disabled.sh
+
   # 他家庭のデータを参照できないことを保証する複合外部キー（#3）が、コードの変更で
   # 静かに壊れていないことを実DB（MySQL）で検証する（#18）。lint-and-buildとは分けてあり、
   # ジョブが落ちてもlint-and-build自体は成功したままになる（branch protectionの必須チェックは

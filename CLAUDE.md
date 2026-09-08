@@ -53,6 +53,7 @@ src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations�
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
+docs/           テスト戦略・検証基準（testing-strategy.md）とバックアップ・復元手順（backup-restore.md）
 db-tests/       実DB（MySQL/MariaDB）に接続して複合外部キー等のDB制約を検証するテスト（#18）。
                 `pnpm test:unit`とは別に`pnpm test:db`で実行する
 scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
@@ -72,6 +73,11 @@ pnpm build:ci
 ```
 
 `typecheck`は`next typegen && tsc --noEmit`、DBを使う`build:ci`は`prisma generate && next build`。
+`build:ci`の後に`bash scripts/check-dev-login-disabled.sh`（本番ビルドを実起動し、開発用ログインが404で
+未ログインが`/login`へ戻ることをHTTPで確かめるスモーク。#13）もCIの`lint-and-build`で実行する。
+**どの層で何をテストするか・機能Issueが同梱すべきテスト・セキュリティ検証の一覧は
+[docs/testing-strategy.md](docs/testing-strategy.md)**、バックアップ・復元・履歴からの再構築は
+[docs/backup-restore.md](docs/backup-restore.md)にある。
 `test:unit`はNode標準の`node --test`で`src/**/*.test.ts`を実行する（テストランナーの依存は入れていない）。
 テストからの相対importは`./access.ts`のように拡張子を付ける（Nodeが拡張子付きしか解決しないため。
 tsconfigの`allowImportingTsExtensions`はこのために有効にしている）。DB・外部サービスには接続しない。
@@ -90,10 +96,15 @@ DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため
 環境では実行しない・できない。ローカルで動かす場合は`pnpm db:migrate:deploy` → `pnpm db:seed`の
 あとに`pnpm test:db`を実行する。`db-tests/**/*.test.ts`は`node --test`が.env.localを読まない
 ため、`db-tests/helpers.ts`が`dotenv`で明示的に読み込む。
+**db-testsが作った家庭の後始末は`deleteHousehold()`を使い、`prisma.household.delete()`を直接呼ばない。**
+`Household`の削除はCascadeで配下へ伝わるが、`StockLot → Product`と`REVERSAL → 取消対象`が`Restrict`のため、
+在庫と履歴を持つ家庭はMariaDBのエラー1217で消せない（Cascadeの伝播順は保証されない）。ヘルパーは
+取消行 → 履歴 → ロット → 家庭の順に消す。以前は失敗を握り潰していたため、実行のたびに検証用の家庭が
+残り続けていた（#13）。
 **外部キー違反の判定は`helpers.ts`の`isForeignKeyViolation()`を使い、Prismaの`P2003`だけで
 判定しない。** MySQLは外部キー違反に1452と1216の2つのコードを持ち、どちらを返すかはサーバーの
-ビルドで変わる（CIのmysql:8.0は1452、Ubuntu同梱の8.0.46は1216）。Prismaが`P2003`へ移すのは1452だけなので、
-コードで判定すると制約は効いているのにローカルでだけテストが落ちる。
+ビルドで変わる（CIのmysql:8.0は1452、ローカル・本番のMariaDBは1216）。Prismaが`P2003`へ移すのは1452だけなので、
+コードで判定すると制約は効いているのにローカル・本番だけでテストが落ちる。
 `.github/workflows/ci.yml`には`lint-and-build`とは別に`db-constraint-tests`ジョブがあり、
 MySQLのサービスコンテナに対して`prisma migrate deploy` → `prisma db seed` → `pnpm test:db`を
 実行する。**このジョブはbranch protectionの必須チェックには含めていない**（必須チェックは
@@ -108,6 +119,9 @@ Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issu
 CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必須チェックであり、
 ワークフロー名`CI`は`claude-ci-fix.yml`と`claude-conflict-resolve.yml`が購読している。
 どちらも変更すると無言で止まるため、変える場合は参照側もあわせて直す。
+
+`StockLot.quantity`が履歴とずれたときは`pnpm db:rebuild-quantities`（dry-run）で一覧し、
+`-- --apply`で履歴の合計へ戻す（`src/lib/inventory/rebuild.ts`。手順は`docs/backup-restore.md`）。
 
 **`lint-and-build`の検証ステップを増やしたら、`claude-ci-fix.yml`と`claude-pr-repair.yml`の
 `verify-commands`も同じ内容へ直す。** あの文字列は無人修復エージェントへのプロンプトへそのまま

@@ -14,9 +14,26 @@ loadEnv({ path: ".env.local", quiet: true });
 
 export const prisma = new PrismaClient();
 
-/** テストが作った家庭を後始末する。onDelete: Cascadeで配下の行もまとめて消える。 */
+/**
+ * テストが作った家庭を後始末する。
+ *
+ * `Household`の削除は`onDelete: Cascade`で配下へ伝わるが、`StockLot → Product`は`Restrict`なので、
+ * 在庫と履歴を持つ家庭をそのまま消すとMariaDBがエラー1217（parent rowの削除拒否）で止める。
+ * 取消行（`REVERSAL`）が取消対象を`Restrict`で参照している点も同じで、1回のDELETEでは
+ * 行の削除順によって親行が先に消えて失敗する。
+ * 以前はこの失敗を握り潰していたため、`pnpm test:db`のたびに検証用の家庭が残っていた（#13）。
+ * 子から順に消して、失敗は握り潰さずに表へ出す。
+ */
 export async function deleteHousehold(householdId: string): Promise<void> {
-  await prisma.household.delete({ where: { id: householdId } }).catch(() => {});
+  await prisma.$transaction([
+    // 取消行は取消対象を`Restrict`で参照しているため、先に消す（取消の取消は無いので2段で足りる）。
+    prisma.inventoryTransaction.deleteMany({
+      where: { householdId, reversesTransactionId: { not: null } },
+    }),
+    prisma.inventoryTransaction.deleteMany({ where: { householdId } }),
+    prisma.stockLot.deleteMany({ where: { householdId } }),
+    prisma.household.delete({ where: { id: householdId } }),
+  ]);
 }
 
 export function createHousehold(name: string) {
