@@ -51,18 +51,25 @@ export interface ExpirySummary {
   readonly expired: number;
   readonly soon: number;
   readonly fine: number;
+  /** 期限が未入力（要確認）。 */
   readonly unknown: number;
+  /** 利用者が「期限なし」と決めたもの。要確認にも期限内にも数えない。 */
+  readonly none: number;
   readonly total: number;
   /** いちばん過ぎている件の超過日数。期限切れが無ければnull。 */
   readonly worstOverdueDays: number | null;
 }
 
-/** 件数の内訳。「要確認」を`fine`へ混ぜないことがこの関数の要点。 */
+/**
+ * 件数の内訳。**「要確認」を`fine`（期限内）へ混ぜない**ことがこの関数の要点。
+ * 「期限なし」と決めたものは`none`として、要確認からも期限内からも外す。
+ */
 export function summarizeExpiry(states: readonly ExpiryState[]): ExpirySummary {
   let expired = 0;
   let soon = 0;
   let fine = 0;
   let unknown = 0;
+  let none = 0;
   let worstOverdueDays: number | null = null;
 
   for (const state of states) {
@@ -82,10 +89,13 @@ export function summarizeExpiry(states: readonly ExpiryState[]): ExpirySummary {
       case "UNKNOWN":
         unknown += 1;
         break;
+      case "NONE":
+        none += 1;
+        break;
     }
   }
 
-  return { expired, soon, fine, unknown, total: states.length, worstOverdueDays };
+  return { expired, soon, fine, unknown, none, total: states.length, worstOverdueDays };
 }
 
 /** 並べ替えに要る最小限の形。ロットの行はこれを満たす。 */

@@ -193,12 +193,19 @@ describe("resolveExpiry", () => {
     assert.equal(resolveExpiry({ useByDate: today }, today, policy).status, "SOON");
   });
 
-  it("期限が無ければUNKNOWN（期限内とはみなさない）", () => {
+  it("期限が未入力ならUNKNOWN（期限内とはみなさない）", () => {
     const state = resolveExpiry({}, today);
 
     assert.equal(state.status, "UNKNOWN");
-    assert.equal(state.kind, "NONE");
+    assert.equal(state.kind, "UNKNOWN");
     assert.equal(state.daysLeft, null);
+  });
+
+  it("「期限なし」と決めた在庫は要確認にしない", () => {
+    const state = resolveExpiry({ noExpiry: true }, today);
+
+    assert.equal(state.status, "NONE");
+    assert.equal(state.kind, "NONE");
   });
 
   it("日付の境目は日本時間の0時（UTCの日付では判定しない）", () => {
@@ -294,7 +301,21 @@ describe("parseStockLotForm", () => {
     const result = parseStockLotForm({ ...base, expiryKind: "NONE" });
 
     assert.ok(result.ok);
+    assert.equal(result.value.expiryKind, "NONE");
     assert.equal(result.value.expiryDate, null);
+  });
+
+  it("未確認（既定）でも日付を求めない。期限なしとは別の種別として返す", () => {
+    const result = parseStockLotForm({ ...base, expiryKind: "UNKNOWN", expiryDate: "" });
+
+    assert.ok(result.ok);
+    assert.equal(result.value.expiryKind, "UNKNOWN");
+    assert.equal(result.value.expiryDate, null);
+
+    // 種別を送らなかった場合も「未確認」に倒す（期限内として黙って通さない）。
+    const omitted = parseStockLotForm({ ...base, expiryKind: undefined, expiryDate: "" });
+    assert.ok(omitted.ok);
+    assert.equal(omitted.value.expiryKind, "UNKNOWN");
   });
 
   it("保管場所を選ばずに詳細位置だけを指定させない", () => {

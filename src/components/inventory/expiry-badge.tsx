@@ -9,9 +9,9 @@ import { formatTokyoDate } from "@/lib/time/tokyo";
  * 余裕あり＝緑、要確認＝灰の破線）をここ1か所に閉じて使う。同じ判定を画面ごとに書くと、
  * 一覧と詳細で「期限間近」の境目がずれる。
  *
- * **期限が入っていないものは「期限なし」ではなく「要確認」と呼ぶ。** 「なし」と書くと
- * 期限が存在しない商品（乾電池など）と、入れ忘れの見分けが付かず、どちらも放置される。
- * 破線にしてあるのも「まだ確定していない」ことを見た目で分けるため。
+ * **期限を入れていないものは既定で「要確認」。** 入れ忘れを「期限なし」と書くと、期限内の在庫と
+ * 見分けが付かないまま古くなる。破線にしてあるのも「まだ確定していない」ことを見た目で分けるため。
+ * 利用者が「期限なし」と決めたもの（塩・工具など）は`NONE`で、無彩色の控えめな表示にする。
  */
 const STYLES: Record<ExpiryState["status"], string> = {
   EXPIRED:
@@ -20,6 +20,7 @@ const STYLES: Record<ExpiryState["status"], string> = {
   FINE: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300",
   UNKNOWN:
     "border-dashed border-slate-400 bg-slate-50 text-slate-600 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-300",
+  NONE: "text-muted-foreground",
 };
 
 export function ExpiryBadge({
@@ -29,8 +30,12 @@ export function ExpiryBadge({
   expiry: ExpiryState;
   detailed?: boolean;
 }) {
-  if (expiry.status === "UNKNOWN" || !expiry.date) {
-    return (
+  if (!expiry.date) {
+    return expiry.status === "NONE" ? (
+      <Badge variant="outline" className={STYLES.NONE}>
+        期限なし
+      </Badge>
+    ) : (
       <Badge variant="outline" className={STYLES.UNKNOWN}>
         {detailed ? "要確認 ・ 期限が未入力です" : "要確認"}
       </Badge>

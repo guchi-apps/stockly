@@ -17,7 +17,7 @@ function day(value: string): Date {
 /** 2026-09-08 12:00 JST。既定のしきい値（賞味7日・消費3日）で判定する。 */
 const NOW = new Date("2026-09-08T03:00:00.000Z");
 
-function lot(name: string, expiry: { bestBeforeDate?: Date; useByDate?: Date }) {
+function lot(name: string, expiry: { bestBeforeDate?: Date; useByDate?: Date; noExpiry?: boolean }) {
   return { product: { name }, expiry: resolveExpiry(expiry, NOW) };
 }
 
@@ -55,6 +55,7 @@ describe("summarizeExpiry", () => {
       resolveExpiry({ bestBeforeDate: day("2027-01-01") }, NOW), // 期限内
       resolveExpiry({}, NOW), // 要確認
       resolveExpiry({}, NOW), // 要確認
+      resolveExpiry({ noExpiry: true }, NOW), // 期限なし（利用者が決めた）
     ];
 
     const summary = summarizeExpiry(states);
@@ -64,7 +65,8 @@ describe("summarizeExpiry", () => {
       soon: 1,
       fine: 1,
       unknown: 2,
-      total: 6,
+      none: 1,
+      total: 7,
       worstOverdueDays: 7,
     });
   });
@@ -97,6 +99,7 @@ describe("groupConsumptionCandidates", () => {
     lot("小麦粉", {}), // 要確認
     lot("牛乳", { useByDate: day("2026-09-09") }), // 期限間近（消費3日）
     lot("ミネラルウォーター", { bestBeforeDate: day("2027-03-01") }), // 期限内
+    lot("ガムテープ", { noExpiry: true }), // 期限なし（候補にも要確認にも出さない）
   ];
 
   it("期限切れ→期限間近→要確認の順にまとめ、期限内は候補に出さない", () => {

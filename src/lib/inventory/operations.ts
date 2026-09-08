@@ -34,8 +34,14 @@ export const RECORDABLE_TYPE_LABELS: Readonly<Record<RecordableTransactionType, 
   ADJUST: "訂正",
 };
 
-/** 期限の種別。ロットは賞味期限と消費期限のどちらか一方だけを持つ。 */
-export const EXPIRY_KINDS = ["NONE", "BEST_BEFORE", "USE_BY"] as const;
+/**
+ * 期限の種別。ロットは賞味期限と消費期限のどちらか一方だけを持つ。
+ *
+ * **`UNKNOWN`（未確認）と`NONE`（期限なし）を分ける。** どちらも日付を持たないが、
+ * 「まだ確かめていない」と「この商品に期限は無い（塩・工具など）」は別のことで、
+ * 混ぜると後者に永久に「要確認」が付く。区別は`StockLot.noExpiry`が持つ。
+ */
+export const EXPIRY_KINDS = ["UNKNOWN", "NONE", "BEST_BEFORE", "USE_BY"] as const;
 export type ExpiryKind = (typeof EXPIRY_KINDS)[number];
 
 /** 数量の入力欄で許す小数の桁数。DB側が`Decimal(14, 3)`のため3桁に揃える。 */
@@ -240,14 +246,18 @@ export function formatQuantityWithUnit(amount: Decimal, unit: UnitCode): string 
  * **期限が入っていないことを`FINE`（期限内）と混ぜない。** 期限不明は「まだ大丈夫」ではなく
  * 「確かめていない」であり、期限内として畳むと、期限を入れ忘れた在庫が一覧の奥へ沈んで
  * そのまま古くなる。`UNKNOWN`として別に数え、画面では「要確認」として出す。
+ *
+ * ただし**利用者が「期限なし」と決めた在庫は`NONE`**で、要確認にはしない（塩・ゴミ袋・工具など、
+ * そもそも期限が存在しないものが毎回並ぶと、要確認そのものが読まれなくなる）。
  */
-export type ExpiryStatus = "EXPIRED" | "SOON" | "FINE" | "UNKNOWN";
+export type ExpiryStatus = "EXPIRED" | "SOON" | "FINE" | "UNKNOWN" | "NONE";
 
 export const EXPIRY_STATUS_LABELS: Readonly<Record<ExpiryStatus, string>> = {
   EXPIRED: "期限切れ",
   SOON: "期限間近",
   FINE: "期限内",
   UNKNOWN: "要確認",
+  NONE: "期限なし",
 };
 
 /** 家庭ごとの「あと何日から期限間近とみなすか」。 */
@@ -274,13 +284,16 @@ export interface ExpiryState {
  * 日付の列（UTC0時）を渡しても同じ結果になる。
  */
 export function resolveExpiry(
-  lot: { bestBeforeDate?: Date | null; useByDate?: Date | null },
+  lot: { bestBeforeDate?: Date | null; useByDate?: Date | null; noExpiry?: boolean },
   now: Date,
   policy: ExpiryPolicy = DEFAULT_EXPIRY_POLICY,
 ): ExpiryState {
-  const kind: ExpiryKind = lot.useByDate ? "USE_BY" : lot.bestBeforeDate ? "BEST_BEFORE" : "NONE";
   const date = lot.useByDate ?? lot.bestBeforeDate ?? null;
-  if (!date) return { status: "UNKNOWN", kind: "NONE", date: null, daysLeft: null };
+  if (!date) {
+    const kind: ExpiryKind = lot.noExpiry ? "NONE" : "UNKNOWN";
+    return { status: kind, kind, date: null, daysLeft: null };
+  }
+  const kind: ExpiryKind = lot.useByDate ? "USE_BY" : "BEST_BEFORE";
 
   const daysLeft = tokyoDaysBetween(now, date);
   const soonDays = kind === "USE_BY" ? policy.useBySoonDays : policy.bestBeforeSoonDays;
@@ -289,7 +302,8 @@ export function resolveExpiry(
 }
 
 export const EXPIRY_KIND_LABELS: Readonly<Record<ExpiryKind, string>> = {
-  NONE: "期限未入力",
+  UNKNOWN: "未確認（あとで入れる）",
+  NONE: "期限なし",
   BEST_BEFORE: "賞味期限",
   USE_BY: "消費期限",
 };
@@ -343,7 +357,7 @@ export function parseStockLotForm(input: RawInput): ParseResult<StockLotFormValu
 
     const expiryKind = parseExpiryKind(input.expiryKind);
     const expiryDate = parseDate(input.expiryDate, "expiryDate");
-    if (expiryKind !== "NONE" && !expiryDate) {
+    if (hasExpiryDate(expiryKind) && !expiryDate) {
       throw new InventoryInputError("expiryDate", "期限の日付を入力してください。");
     }
 
@@ -362,15 +376,20 @@ export function parseStockLotForm(input: RawInput): ParseResult<StockLotFormValu
       storageLocationId,
       storagePositionId,
       expiryKind,
-      expiryDate: expiryKind === "NONE" ? null : expiryDate,
+      expiryDate: hasExpiryDate(expiryKind) ? expiryDate : null,
       opened: text(input, "opened") === "on",
       note: text(input, "note") || null,
     };
   });
 }
 
+/** 日付を持つ種別か（賞味期限・消費期限）。 */
+export function hasExpiryDate(kind: ExpiryKind): boolean {
+  return kind === "BEST_BEFORE" || kind === "USE_BY";
+}
+
 function parseExpiryKind(raw: string | undefined | null): ExpiryKind {
-  const value = (raw ?? "NONE").trim();
+  const value = (raw ?? "UNKNOWN").trim();
   const found = EXPIRY_KINDS.find((kind) => kind === value);
   if (!found) throw new InventoryInputError("expiryKind", "期限の種類を選んでください。");
   return found;

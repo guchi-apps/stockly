@@ -57,7 +57,10 @@ export function ExpirySummary({
       key: "fine" as const,
       label: "期限内",
       value: summary.fine,
-      note: `在庫は全部で${summary.total}件`,
+      note:
+        summary.none > 0
+          ? `期限なし${summary.none}件を除く（全部で${summary.total}件）`
+          : `在庫は全部で${summary.total}件`,
       href: "/inventory",
     },
   ];

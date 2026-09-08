@@ -12,6 +12,7 @@ import { db } from "@/lib/db";
 import { scopeToHousehold } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
 
+import { EXPIRY_LOT_SELECT, findActiveLotsForExpiry } from "./expiry-lots.ts";
 import {
   compareByExpiry,
   groupConsumptionCandidates,
@@ -31,21 +32,6 @@ async function scope(ctx: InventoryContext): Promise<string> {
   );
   return householdId;
 }
-
-const LOT_SELECT = {
-  id: true,
-  quantity: true,
-  unit: true,
-  status: true,
-  bestBeforeDate: true,
-  useByDate: true,
-  openedAt: true,
-  note: true,
-  updatedAt: true,
-  product: { select: { id: true, name: true, brand: true, category: { select: { name: true } } } },
-  storageLocation: { select: { id: true, name: true } },
-  storagePosition: { select: { id: true, name: true } },
-} as const;
 
 export type StockLotRow = Awaited<ReturnType<typeof listStockLots>>[number];
 
@@ -91,7 +77,7 @@ export async function listStockLots(ctx: InventoryContext, filter: InventoryFilt
           }
         : {}),
     },
-    select: LOT_SELECT,
+    select: EXPIRY_LOT_SELECT,
   });
 
   const now = new Date();
@@ -115,11 +101,7 @@ export async function getExpiryOverview(
 ) {
   const householdId = await scope(ctx);
   const settings = await readExpirySettings(householdId);
-
-  const lots = await db.stockLot.findMany({
-    where: { householdId, status: "ACTIVE" },
-    select: LOT_SELECT,
-  });
+  const lots = await findActiveLotsForExpiry(db, householdId);
 
   const now = new Date();
   const policy = toExpiryPolicy(settings);
@@ -169,7 +151,7 @@ export async function getStockLotDetail(ctx: InventoryContext, lotId: string) {
   const lot = await db.stockLot.findFirst({
     where: { id: lotId, householdId },
     select: {
-      ...LOT_SELECT,
+      ...EXPIRY_LOT_SELECT,
       product: {
         select: {
           id: true,

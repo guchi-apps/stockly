@@ -375,6 +375,9 @@ model StockLot {
   bestBeforeDate DateTime? @db.Date
   /// 消費期限（安全に食べられる期限）。
   useByDate      DateTime? @db.Date
+  /// 「この在庫に期限は無い」と利用者が明示したか（塩・日用品・工具など）。
+  /// 期限の列が空でも、**入れ忘れ（要確認）とは区別する**。既定はfalse＝まだ確かめていない。
+  noExpiry       Boolean   @default(false)
   /// 開封日時。開封後の期限計算に使う。
   openedAt       DateTime?
   acquiredAt     DateTime?

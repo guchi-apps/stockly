@@ -10,11 +10,13 @@
  * `node`から直接実行でき、テストでは差し替えられる。
  *
  * 家庭の境界について: このジョブは利用者ではなくシステムとして動くため`scopeToHousehold()`は
- * 通らない。代わりに**家庭を1つずつ取り出し、その`householdId`だけをwhereに使う**
- * （複数家庭をまたいで集計しない）。
+ * 通らない（利用者がいないので所属を確かめようがない）。代わりに**家庭を1つずつ取り出し、
+ * その`householdId`だけを`findActiveLotsForExpiry()`へ渡す**（複数家庭をまたいで集計しない）。
+ * 在庫の読み取りを直書きせず画面と同じ`expiry-lots.ts`を通すのも、条件が食い違わないようにするため。
  */
 import type { PrismaClient } from "@prisma/client";
 
+import { findActiveLotsForExpiry } from "../inventory/expiry-lots.ts";
 import {
   DEFAULT_EXPIRY_POLICY,
   resolveExpiry,
@@ -134,20 +136,7 @@ async function collectExpiryTargets(
   now: Date,
   policy: ExpiryPolicy,
 ): Promise<ExpiryTarget[]> {
-  const lots = await db.stockLot.findMany({
-    where: {
-      householdId,
-      status: "ACTIVE",
-      quantity: { gt: 0 },
-      OR: [{ bestBeforeDate: { not: null } }, { useByDate: { not: null } }],
-    },
-    select: {
-      id: true,
-      bestBeforeDate: true,
-      useByDate: true,
-      product: { select: { name: true } },
-    },
-  });
+  const lots = await findActiveLotsForExpiry(db, householdId, { onlyWithExpiryDate: true });
 
   const targets: ExpiryTarget[] = [];
   for (const lot of lots) {
