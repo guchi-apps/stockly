@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, History, MapPin } from "lucide-react";
+import { Boxes, CalendarClock, History, MapPin } from "lucide-react";
 import { cn } from "cn";
 
 /**
@@ -12,6 +12,7 @@ import { cn } from "cn";
  */
 const ITEMS = [
   { href: "/inventory", label: "在庫", icon: Boxes },
+  { href: "/expiry", label: "期限", icon: CalendarClock },
   { href: "/history", label: "履歴", icon: History },
   { href: "/storage", label: "保管場所", icon: MapPin },
 ] as const;
@@ -60,7 +61,7 @@ export function BottomNav() {
   const current = useCurrent();
 
   return (
-    <nav className="bg-background/95 fixed inset-x-0 bottom-0 z-20 grid grid-cols-3 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
+    <nav className="bg-background/95 fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
       {ITEMS.map(({ href, label, icon: Icon }) => (
         <Link
           key={href}

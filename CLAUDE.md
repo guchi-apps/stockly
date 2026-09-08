@@ -44,19 +44,22 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 
 ```
 src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
-src/app/(app)/  在庫・履歴・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
+src/app/(app)/  在庫・期限・履歴・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
 src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
-src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations）と、DBを触るservice・queries
+src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations・expiry）と、DBを触るservice・queries・settings
+src/lib/notifications/ 通知（#5）。チャネル境界（channels）・重複防止（service）・期限ジョブ（expiry-job）
+src/lib/time/   日付の境目（tokyo.ts）。期限の「今日」はここだけで決める
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
 docs/           テスト戦略・検証基準（testing-strategy.md）とバックアップ・復元手順（backup-restore.md）
 db-tests/       実DB（MySQL/MariaDB）に接続して複合外部キー等のDB制約を検証するテスト（#18）。
                 `pnpm test:unit`とは別に`pnpm test:db`で実行する
-scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
+scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する。
+                run-expiry-notifications.tsは`pnpm job:expiry`＝期限通知のバッチ）
 deploy/         PM2のecosystem.config.js。本番のプロセス名は`stockly`で待受は3116
 .github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト、secrets-manifest.tsv
 ```
@@ -204,6 +207,36 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   訂正する手段が無くなる
 - 画面の確認用データは`pnpm db:seed:fixture`（`prisma/fixtures/daily-inventory.ts`）。
   流すたびに`fx-`で始まる在庫・履歴を作り直すので、画面で試した記録が残らない
+
+## 期限と通知
+
+期限の判定（#5）は次の3点が前提。
+
+- **「今日」は日本時間で決める**（`src/lib/time/tokyo.ts`）。期限の列はMySQLの`DATE`で、Prismaは
+  UTC0時の`Date`として返す。ここでUTC基準に数えると**JSTの0時〜9時のあいだだけ判定が1日ずれる**
+  （朝8時に開くと、今日切れる在庫が「今日まで」のままになる）。日付の引き算は`tokyoDaysBetween()`を通す。
+  日付の列も時刻を持つ値も同じ関数で扱える（UTC0時 + 9時間は同じ日の朝9時なので日付が変わらない）
+- **期限が入っていない在庫は`UNKNOWN`（要確認）で、`FINE`（期限内）に混ぜない。** 混ぜると、期限を
+  入れ忘れた在庫が「期限内」として数えられ、そのまま古くなる。件数（`summarizeExpiry()`）でも
+  絞り込み（`?expiry=unknown`）でも独立して数える
+- **接近日数は賞味期限と消費期限で別に持つ**（既定7日・3日。`ExpirySetting`）。設定が無い家庭は
+  `DEFAULT_EXPIRY_POLICY`で動くので、家庭を作るたびに設定行を用意しなくてよい
+
+通知は`src/lib/notifications/`。
+
+- **重複防止は専用のフラグを持たず、`@@unique([householdId, channel, dedupeKey])`で行う**
+  （在庫の二重送信対策と同じ考え方）。2回目のINSERTは弾かれるので、そのとき既存行の
+  `suppressedCount`を増やす。「送らなかったこと」も記録に残す
+- **dedupeKeyに日付を入れない。** 対象ロットと状態（`lotId:status`）の指紋から作るため、状況が
+  変わらないかぎり何度実行しても届かず、期限間近→期限切れのように**変わったときだけ**もう一度届く。
+  日付を入れると毎日必ず鳴り、ロットidだけにすると状態が変わっても鳴らない
+- **送信に失敗した行は`dedupeKey`を`failed:<id>`へ退避する。** そのまま残すと次回が「送信済み」と
+  見なされ、永久に届かない
+- **`channels.ts`・`service.ts`・`expiry-job.ts`では`@/`エイリアスを使わない。** `pnpm job:expiry`が
+  `node`から直接読むため（seed.tsと同じ制約）。PrismaClientは引数で受け取る。
+  画面から呼ぶ読み取り（`inbox.ts`）は`scopeToHousehold()`を通す通常の画面用モジュール
+- 送り先は`STOCKLY_NOTIFY_CHANNELS`（既定は`IN_APP`）。メール・LINE等の外部サービスは未実装で、
+  追加にはユーザー確認が要る。**定期実行（cron）の登録はVPS側の手作業**で、このリポジトリには入っていない
 
 ## 認証と家庭の境界
 
