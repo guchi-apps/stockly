@@ -96,6 +96,11 @@ export function parseAmount(
   raw: string | undefined | null,
   field: string,
   label = "数量",
+  /**
+   * `allowZero`は0を受け付ける。補充基準の「0になったら買う」のように、0が意味を持つ
+   * 入力欄でだけ渡す（在庫の増減では0の記録に意味が無いため、既定は0を弾く）。
+   */
+  options: { allowZero?: boolean } = {},
 ): Decimal {
   const normalized = (raw ?? "")
     .trim()
@@ -112,8 +117,13 @@ export function parseAmount(
   }
 
   const amount = new Decimal(normalized);
-  if (!amount.isPositive() || amount.isZero()) {
-    throw new InventoryInputError(field, `${label}は0より大きい値を入力してください。`);
+  if (amount.isZero() ? !options.allowZero : !amount.isPositive()) {
+    throw new InventoryInputError(
+      field,
+      options.allowZero
+        ? `${label}は0以上の値を入力してください。`
+        : `${label}は0より大きい値を入力してください。`,
+    );
   }
   if (amount.decimalPlaces() > QUANTITY_SCALE) {
     throw new InventoryInputError(

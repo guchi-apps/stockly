@@ -17,7 +17,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { parseBarcode, parseSymbology } from "@/lib/barcode/code";
-import { resolveInternalPath } from "@/lib/auth/internal-path";
 import { requireInventoryContextForAction } from "@/lib/inventory/context";
 import {
   InventoryInputError,
@@ -29,8 +28,6 @@ import {
   parseStorageLocationForm,
 } from "@/lib/inventory/operations";
 import {
-  InventoryConflictError,
-  InventoryNotFoundError,
   createDefaultStorageLocations,
   createStockLot,
   createStorageLocation,
@@ -53,52 +50,8 @@ import {
   runExpiryCheckForHousehold,
 } from "@/lib/notifications/inbox";
 
+import { backPath, rawInput, str, userFacingMessage, withParams } from "./action-result";
 import type { InventoryFormState } from "./form-state";
-
-function str(formData: FormData, key: string): string {
-  const value = formData.get(key);
-  return typeof value === "string" ? value : "";
-}
-
-function rawInput(formData: FormData): Record<string, string> {
-  const input: Record<string, string> = {};
-  for (const [key, value] of formData.entries()) {
-    if (typeof value === "string") input[key] = value;
-  }
-  return input;
-}
-
-/**
- * 利用者に見せてよいエラーか。
- *
- * 想定外の例外はここで握り潰さず、そのまま投げてNext.jsのエラー画面に出す。
- * 「操作できませんでした」とだけ表示して原因を消すと、追えなくなる。
- */
-function userFacingMessage(error: unknown): string {
-  if (
-    error instanceof InventoryInputError ||
-    error instanceof InventoryConflictError ||
-    error instanceof InventoryNotFoundError
-  ) {
-    return error.message;
-  }
-  throw error;
-}
-
-function withParams(path: string, params: { notice?: string; error?: string }): string {
-  const search = new URLSearchParams();
-  if (params.notice) search.set("notice", params.notice);
-  if (params.error) search.set("error", params.error);
-  const query = search.toString();
-  return query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
-}
-
-/** 戻り先はフォームから渡ってくるため、必ず内部パスへ正す（open redirectの防止）。 */
-function backPath(formData: FormData, fallback: string): string {
-  const value = str(formData, "redirectTo");
-  const path = resolveInternalPath(value);
-  return path === "/" && value !== "/" ? fallback : path;
-}
 
 function revalidateInventory(): void {
   revalidatePath("/inventory");

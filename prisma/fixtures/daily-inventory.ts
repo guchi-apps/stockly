@@ -295,7 +295,7 @@ interface FixtureRule {
  * 読み取り後の登録画面で、どの欄が「前回の確定」として埋まるかを確かめるためのもの。
  * 期限は日数で持つので、いつ流しても次回の既定日が今日からの相対になる。
  */
-const RULES: FixtureRule[] = [
+const PRODUCT_RULES: FixtureRule[] = [
   {
     id: "fx-rule-water",
     productId: "fx-product-water",
@@ -475,12 +475,52 @@ const LOTS: FixtureLot[] = [
  * 取消（REVERSAL）行は他の履歴を外部キーで参照しているため、先に消す。
  * まとめて消すと、同じDELETE文の中で参照先が先に消えて制約違反になりうる。
  */
+/**
+ * 補充基準（#6）。商品ごと・カテゴリごとの両方を入れて、補充の画面で
+ * 「不足あり」「足りている」「換算できない在庫がある」を一度に見られるようにする。
+ *
+ * - トイレットペーパーは0.4ロールしかないので候補に出る（商品ごとの基準）
+ * - 飲料はカテゴリ合計で判定する。水は2L×5本＋飲みかけで、Lへ換算して数える
+ * - カップ麺は2個。期限切れのサトウのごはんは数えないので、こちらも候補に出る
+ */
+const REPLENISHMENT_RULES = [
+  {
+    id: "fx-rule-toilet-paper",
+    productId: "fx-product-toilet-paper",
+    categoryId: null,
+    thresholdAmount: "2",
+    targetAmount: "12",
+    unit: "ROLL" as UnitCode,
+  },
+  {
+    id: "fx-rule-drink",
+    productId: null,
+    categoryId: "fx-category-drink",
+    thresholdAmount: "20",
+    targetAmount: "36",
+    unit: "LITER" as UnitCode,
+  },
+  {
+    id: "fx-rule-cup-noodle",
+    productId: "fx-product-cup-noodle",
+    categoryId: null,
+    thresholdAmount: "3",
+    targetAmount: "6",
+    unit: "PIECE" as UnitCode,
+  },
+];
+
 async function resetFixtureRows(): Promise<void> {
   // バーコードと学習ルール（#9）は在庫に依存しないので、ロットの有無にかかわらず作り直す。
   await prisma.barcode.deleteMany({
     where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-barcode-" } },
   });
   await prisma.productRule.deleteMany({
+    where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-rule-" } },
+  });
+  // 補充基準は「対象ごとに1件」なので、作り直す前に必ず消す（idが違う同じ対象の基準が
+  // 残っていると、下のcreateが一意制約で落ちる）。
+  await prisma.replenishmentRule.deleteMany({
     where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-rule-" } },
   });
 
@@ -641,7 +681,7 @@ async function main(): Promise<void> {
     });
   }
 
-  for (const rule of RULES) {
+  for (const rule of PRODUCT_RULES) {
     await prisma.productRule.create({
       data: {
         id: rule.id,
@@ -661,9 +701,35 @@ async function main(): Promise<void> {
     });
   }
 
+  for (const rule of REPLENISHMENT_RULES) {
+    const productId = rule.productId ? (productIds.get(rule.productId) as string) : null;
+    const categoryId = rule.categoryId ? (categoryIds.get(rule.categoryId) as string) : null;
+
+    // 画面から同じ対象の基準を作っていた場合は、そちらを消してから入れ直す。
+    await prisma.replenishmentRule.deleteMany({
+      where: {
+        householdId: HOUSEHOLD_ID,
+        ...(productId ? { productId } : { categoryId }),
+      },
+    });
+
+    await prisma.replenishmentRule.create({
+      data: {
+        id: rule.id,
+        householdId: HOUSEHOLD_ID,
+        productId,
+        categoryId,
+        thresholdAmount: new Decimal(rule.thresholdAmount),
+        targetAmount: new Decimal(rule.targetAmount),
+        unit: rule.unit,
+      },
+    });
+  }
+
   console.log(
     `fixture投入完了: 保管場所 ${LOCATIONS.length}件 / 商品 ${PRODUCTS.length}件 / ` +
-      `在庫 ${LOTS.length}件 / バーコード ${BARCODES.length}件 / 学習ルール ${RULES.length}件`,
+      `在庫 ${LOTS.length}件 / バーコード ${BARCODES.length}件 / 学習ルール ${PRODUCT_RULES.length}件 / ` +
+      `補充基準 ${REPLENISHMENT_RULES.length}件`,
   );
 }
 
