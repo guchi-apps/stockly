@@ -63,6 +63,10 @@ model Household {
   stockLots        StockLot[]
   transactions     InventoryTransaction[]
 
+  // 期限と通知（#5）。
+  expirySetting          ExpirySetting?
+  notificationDeliveries NotificationDelivery[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -436,4 +440,85 @@ model InventoryTransaction {
   @@index([householdId, productId, occurredAt])
   @@index([householdId, occurredAt])
   @@index([householdId, memberId])
+}
+
+// ===========================================================================
+// 期限と通知（#5）
+// ===========================================================================
+
+/// 通知の種別。いまは期限だけだが、補充（#6）など別の理由の通知もここへ足す。
+enum NotificationKind {
+  EXPIRY // 期限切れ・期限間近
+}
+
+/// 通知先。**新しい送り先を足すときは、ここと`src/lib/notifications/channels.ts`の両方へ足す。**
+/// メール・LINE等の外部サービスは、導入の可否をユーザーに確認してから追加する。
+enum NotificationChannel {
+  IN_APP // アプリ内のお知らせ（この行そのものが本体）
+  LOG // サーバーログ
+}
+
+enum NotificationStatus {
+  SENT // 送信済み
+  FAILED // 送信を試みて失敗した
+}
+
+/// 家庭ごとの期限の見かた（#5）。無い家庭は`DEFAULT_EXPIRY_POLICY`と同じ既定値で動く。
+model ExpirySetting {
+  id          String @id @default(cuid())
+  householdId String @unique
+
+  /// 賞味期限を「期限間近」とみなす残り日数。
+  bestBeforeSoonDays Int @default(7)
+  /// 消費期限を「期限間近」とみなす残り日数。切れたら食べないため、賞味期限より短くしてある。
+  useBySoonDays      Int @default(3)
+
+  /// 期限が未入力の在庫を「要確認」として先頭に出すか。**期限内とはみなさない。**
+  highlightUnknownExpiry Boolean @default(true)
+  /// 期限の通知を送るか。
+  notifyEnabled          Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, id])
+}
+
+/// 送った通知の記録。**重複通知を防ぐ台帳そのもの**で、アプリ内のお知らせの実体でもある。
+///
+/// 同じ内容を二度送らないことは`@@unique([householdId, channel, dedupeKey])`が担保する。
+/// 2回目以降は行を足さず、既存の行の`suppressedCount`を増やす（送らなかったことも記録に残す）。
+/// dedupeKeyの組み立ては`src/lib/notifications/expiry-message.ts`が持つ。
+model NotificationDelivery {
+  id          String              @id @default(cuid())
+  householdId String
+  kind        NotificationKind    @default(EXPIRY)
+  channel     NotificationChannel
+
+  /// 同じ通知かどうかの判定キー。期限では「対象ロットとその状態の組み合わせ」から作るため、
+  /// 状況が変わらないかぎり何度実行しても増えない。
+  dedupeKey String @db.VarChar(120)
+
+  title   String
+  body    String  @db.Text
+  /// 通知の対象（ロットidと状態）。あとから「何を根拠に送ったか」を追えるようにする。
+  payload Json?
+
+  status NotificationStatus @default(SENT)
+  error  String?            @db.Text
+
+  /// 同じ内容で送信を見送った回数と、その最後の時刻。重複防止が効いていることの記録。
+  suppressedCount  Int       @default(0)
+  lastSuppressedAt DateTime?
+
+  sentAt DateTime  @default(now())
+  readAt DateTime?
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, id])
+  @@unique([householdId, channel, dedupeKey])
+  @@index([householdId, kind, sentAt])
 }

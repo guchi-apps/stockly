@@ -8,6 +8,8 @@
  * 数量は必ず`Decimal`で扱う。`number`は0.1+0.2が0.30000000000000004になり、
  * 0.4ロールのような小数の在庫がすぐ合わなくなる。
  */
+import { tokyoDaysBetween } from "../time/tokyo.ts";
+
 import { applyEntry, isReversed, type LedgerEntry } from "./ledger.ts";
 import {
   Decimal,
@@ -39,8 +41,20 @@ export type ExpiryKind = (typeof EXPIRY_KINDS)[number];
 /** 数量の入力欄で許す小数の桁数。DB側が`Decimal(14, 3)`のため3桁に揃える。 */
 const QUANTITY_SCALE = 3;
 
-/** 期限が「近い」と扱う残り日数。 */
-export const EXPIRY_SOON_DAYS = 7;
+/**
+ * 期限が「近い」と扱う残り日数の既定値。
+ *
+ * 賞味期限と消費期限で違えてあるのは、切れたときの困り方が違うため。賞味期限は品質の目安で
+ * 少し過ぎても食べられることが多い一方、消費期限は過ぎたら食べない。同じ日数で騒ぐと、
+ * 賞味期限の通知に慣れて消費期限も見落とす。家庭ごとの上書きは`ExpirySetting`が持つ。
+ */
+export const DEFAULT_EXPIRY_POLICY: ExpiryPolicy = {
+  bestBeforeSoonDays: 7,
+  useBySoonDays: 3,
+};
+
+/** 設定で受け付ける接近日数の上限。1年より先を「期限間近」と呼ぶ意味がないため。 */
+export const EXPIRY_SOON_DAYS_MAX = 365;
 
 /**
  * 入力が受け付けられなかったことを表す。
@@ -220,7 +234,27 @@ export function formatQuantityWithUnit(amount: Decimal, unit: UnitCode): string 
 // 期限
 // ---------------------------------------------------------------------------
 
-export type ExpiryStatus = "EXPIRED" | "SOON" | "FINE" | "NONE";
+/**
+ * 期限の状態。
+ *
+ * **期限が入っていないことを`FINE`（期限内）と混ぜない。** 期限不明は「まだ大丈夫」ではなく
+ * 「確かめていない」であり、期限内として畳むと、期限を入れ忘れた在庫が一覧の奥へ沈んで
+ * そのまま古くなる。`UNKNOWN`として別に数え、画面では「要確認」として出す。
+ */
+export type ExpiryStatus = "EXPIRED" | "SOON" | "FINE" | "UNKNOWN";
+
+export const EXPIRY_STATUS_LABELS: Readonly<Record<ExpiryStatus, string>> = {
+  EXPIRED: "期限切れ",
+  SOON: "期限間近",
+  FINE: "期限内",
+  UNKNOWN: "要確認",
+};
+
+/** 家庭ごとの「あと何日から期限間近とみなすか」。 */
+export interface ExpiryPolicy {
+  readonly bestBeforeSoonDays: number;
+  readonly useBySoonDays: number;
+}
 
 export interface ExpiryState {
   readonly status: ExpiryStatus;
@@ -230,35 +264,32 @@ export interface ExpiryState {
   readonly daysLeft: number | null;
 }
 
-/** カレンダー上の日付だけを比べる。時刻を含んだまま引くと、同じ日でも±1日ずれる。 */
-function toUtcDayNumber(date: Date): number {
-  return Math.floor(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / 86_400_000,
-  );
-}
-
 /**
  * ロットの期限の状態。
  *
  * 消費期限（安全に食べられる期限）と賞味期限（品質の期限）の両方があるときは、
- * 切れると困る度合いが強い消費期限を優先する。
+ * 切れると困る度合いが強い消費期限を優先し、しきい値もその種別のものを使う。
+ *
+ * 日付の境目は日本時間の0時（`tokyoDaysBetween()`）。`now`には「いま」をそのまま渡してよく、
+ * 日付の列（UTC0時）を渡しても同じ結果になる。
  */
 export function resolveExpiry(
   lot: { bestBeforeDate?: Date | null; useByDate?: Date | null },
-  today: Date,
-  soonDays: number = EXPIRY_SOON_DAYS,
+  now: Date,
+  policy: ExpiryPolicy = DEFAULT_EXPIRY_POLICY,
 ): ExpiryState {
   const kind: ExpiryKind = lot.useByDate ? "USE_BY" : lot.bestBeforeDate ? "BEST_BEFORE" : "NONE";
   const date = lot.useByDate ?? lot.bestBeforeDate ?? null;
-  if (!date) return { status: "NONE", kind: "NONE", date: null, daysLeft: null };
+  if (!date) return { status: "UNKNOWN", kind: "NONE", date: null, daysLeft: null };
 
-  const daysLeft = toUtcDayNumber(date) - toUtcDayNumber(today);
+  const daysLeft = tokyoDaysBetween(now, date);
+  const soonDays = kind === "USE_BY" ? policy.useBySoonDays : policy.bestBeforeSoonDays;
   const status: ExpiryStatus = daysLeft < 0 ? "EXPIRED" : daysLeft <= soonDays ? "SOON" : "FINE";
   return { status, kind, date, daysLeft };
 }
 
 export const EXPIRY_KIND_LABELS: Readonly<Record<ExpiryKind, string>> = {
-  NONE: "期限なし",
+  NONE: "期限未入力",
   BEST_BEFORE: "賞味期限",
   USE_BY: "消費期限",
 };
@@ -379,6 +410,45 @@ export function parseStorageLocationForm(input: RawInput): ParseResult<StorageLo
 
     return { name, kind, temperatureZone };
   });
+}
+
+/** 期限の設定（家庭ごと）の入力。 */
+export interface ExpirySettingsFormValue {
+  readonly bestBeforeSoonDays: number;
+  readonly useBySoonDays: number;
+  readonly highlightUnknownExpiry: boolean;
+  readonly notifyEnabled: boolean;
+}
+
+export function parseExpirySettingsForm(input: RawInput): ParseResult<ExpirySettingsFormValue> {
+  return collect(() => ({
+    bestBeforeSoonDays: parseDayCount(input.bestBeforeSoonDays, "bestBeforeSoonDays", "賞味期限の日数"),
+    useBySoonDays: parseDayCount(input.useBySoonDays, "useBySoonDays", "消費期限の日数"),
+    highlightUnknownExpiry: text(input, "highlightUnknownExpiry") === "on",
+    notifyEnabled: text(input, "notifyEnabled") === "on",
+  }));
+}
+
+/** 0以上`EXPIRY_SOON_DAYS_MAX`以下の整数。0は「当日だけを期限間近にする」の意味で許す。 */
+export function parseDayCount(
+  raw: string | undefined | null,
+  field: string,
+  label: string,
+): number {
+  const normalized = (raw ?? "")
+    .trim()
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));
+
+  if (normalized === "") throw new InventoryInputError(field, `${label}を入力してください。`);
+  if (!/^\d+$/.test(normalized)) {
+    throw new InventoryInputError(field, `${label}は0以上の整数で入力してください。`);
+  }
+
+  const days = Number(normalized);
+  if (days > EXPIRY_SOON_DAYS_MAX) {
+    throw new InventoryInputError(field, `${label}は${EXPIRY_SOON_DAYS_MAX}日までです。`);
+  }
+  return days;
 }
 
 /**

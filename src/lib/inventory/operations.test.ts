@@ -9,6 +9,7 @@ import {
   nextLotStatus,
   parseAmount,
   parseDate,
+  parseExpirySettingsForm,
   parseOperationId,
   parseRecordForm,
   parseStockLotForm,
@@ -172,13 +173,49 @@ describe("resolveExpiry", () => {
     assert.equal(resolveExpiry({ useByDate: today }, today).status, "SOON");
   });
 
-  it("7日以内はSOON、それより先はFINE", () => {
+  it("賞味期限は7日以内がSOON、それより先はFINE（既定値）", () => {
     assert.equal(resolveExpiry({ bestBeforeDate: day("2026-09-14") }, today).status, "SOON");
     assert.equal(resolveExpiry({ bestBeforeDate: day("2026-09-15") }, today).status, "FINE");
   });
 
-  it("期限が無ければNONE", () => {
-    assert.equal(resolveExpiry({}, today).status, "NONE");
+  it("消費期限は賞味期限より短い日数で判定する（既定は3日）", () => {
+    assert.equal(resolveExpiry({ useByDate: day("2026-09-10") }, today).status, "SOON");
+    assert.equal(resolveExpiry({ useByDate: day("2026-09-11") }, today).status, "FINE");
+    // 同じ日付でも、賞味期限なら「期限間近」になる。
+    assert.equal(resolveExpiry({ bestBeforeDate: day("2026-09-11") }, today).status, "SOON");
+  });
+
+  it("しきい値は家庭ごとに変えられる", () => {
+    const policy = { bestBeforeSoonDays: 1, useBySoonDays: 0 };
+
+    assert.equal(resolveExpiry({ bestBeforeDate: day("2026-09-09") }, today, policy).status, "FINE");
+    assert.equal(resolveExpiry({ useByDate: day("2026-09-08") }, today, policy).status, "FINE");
+    assert.equal(resolveExpiry({ useByDate: today }, today, policy).status, "SOON");
+  });
+
+  it("期限が無ければUNKNOWN（期限内とはみなさない）", () => {
+    const state = resolveExpiry({}, today);
+
+    assert.equal(state.status, "UNKNOWN");
+    assert.equal(state.kind, "NONE");
+    assert.equal(state.daysLeft, null);
+  });
+
+  it("日付の境目は日本時間の0時（UTCの日付では判定しない）", () => {
+    const expiry = { useByDate: day("2026-09-08") };
+
+    // 2026-09-08 23:00 JST。まだ当日なので「今日まで」。
+    const beforeMidnight = resolveExpiry(expiry, new Date("2026-09-08T14:00:00.000Z"));
+    assert.equal(beforeMidnight.status, "SOON");
+    assert.equal(beforeMidnight.daysLeft, 0);
+
+    // 2026-09-09 00:30 JST。UTCではまだ9/8だが、日本時間では日付が変わっている。
+    const afterMidnight = resolveExpiry(expiry, new Date("2026-09-08T15:30:00.000Z"));
+    assert.equal(afterMidnight.status, "EXPIRED");
+    assert.equal(afterMidnight.daysLeft, -1);
+
+    // 2026-09-09 08:00 JST（UTCではまだ9/8）。UTC基準だと期限切れを見落とす時間帯。
+    assert.equal(resolveExpiry(expiry, new Date("2026-09-08T23:00:00.000Z")).status, "EXPIRED");
   });
 
   it("消費期限と賞味期限があれば、切れると困る消費期限を優先する", () => {
@@ -313,5 +350,42 @@ describe("formatQuantityWithUnit", () => {
   it("末尾の余分な0を落とす", () => {
     assert.equal(formatQuantityWithUnit(new Decimal("0.400"), "ROLL"), "0.4ロール");
     assert.equal(formatQuantityWithUnit(new Decimal("3"), "USE"), "3回");
+  });
+});
+
+describe("parseExpirySettingsForm", () => {
+  it("日数と切り替えをまとめて読む", () => {
+    const result = parseExpirySettingsForm({
+      bestBeforeSoonDays: "10",
+      useBySoonDays: "０", // 全角も受け付ける（スマホの入力で混ざる）
+      highlightUnknownExpiry: "on",
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.value, {
+      bestBeforeSoonDays: 10,
+      useBySoonDays: 0,
+      highlightUnknownExpiry: true,
+      // チェックが外れた欄はフォームから送られてこない＝オフ。
+      notifyEnabled: false,
+    });
+  });
+
+  it("負の数・小数・上限超えを弾く", () => {
+    for (const value of ["-1", "3.5", "366", "毎日"]) {
+      const result = parseExpirySettingsForm({ bestBeforeSoonDays: value, useBySoonDays: "3" });
+      assert.equal(result.ok, false, `${value} は受け付けない`);
+      if (result.ok) return;
+      assert.ok(result.errors.bestBeforeSoonDays);
+    }
+  });
+
+  it("空欄は入力を促す", () => {
+    const result = parseExpirySettingsForm({ bestBeforeSoonDays: "7", useBySoonDays: "" });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.match(result.errors.useBySoonDays, /入力してください/);
   });
 });

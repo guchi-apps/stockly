@@ -2,10 +2,11 @@ import Link from "next/link";
 import { MapPin, Plus } from "lucide-react";
 
 import { ActionNotice, EmptyState, PageHeader, firstValue } from "@/components/inventory/chrome";
-import { InventoryFilters } from "@/components/inventory/inventory-filters";
+import { InventoryFilters, buildHref } from "@/components/inventory/inventory-filters";
 import { InventoryList } from "@/components/inventory/inventory-list";
 import { Button } from "@/components/ui/button";
 import { requireInventoryContext } from "@/lib/inventory/context";
+import { parseExpiryFilter } from "@/lib/inventory/expiry";
 
 export default async function InventoryPage({ searchParams }: PageProps<"/inventory">) {
   const params = await searchParams;
@@ -23,8 +24,8 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
 
   const location = firstValue(params.location);
   const q = firstValue(params.q);
-  const expired = firstValue(params.expired) === "1";
-  const currentPath = buildPath({ location, q, expired });
+  const expiry = parseExpiryFilter(firstValue(params.expiry));
+  const currentPath = buildHref({ location, q, expiry });
 
   return (
     <>
@@ -43,22 +44,13 @@ export default async function InventoryPage({ searchParams }: PageProps<"/invent
 
       <ActionNotice notice={firstValue(params.notice)} error={firstValue(params.error)} />
 
-      <InventoryFilters ctx={ctx} current={{ location, q, expired }} />
+      <InventoryFilters ctx={ctx} current={{ location, q, expiry }} />
 
       <InventoryList
         ctx={ctx}
-        filter={{ storageLocationId: location ?? null, q: q ?? null, expiredOnly: expired }}
+        filter={{ storageLocationId: location ?? null, q: q ?? null, expiry }}
         redirectTo={currentPath}
       />
     </>
   );
-}
-
-function buildPath(params: { location?: string; q?: string; expired?: boolean }): string {
-  const search = new URLSearchParams();
-  if (params.q) search.set("q", params.q);
-  if (params.location) search.set("location", params.location);
-  if (params.expired) search.set("expired", "1");
-  const query = search.toString();
-  return query ? `/inventory?${query}` : "/inventory";
 }
