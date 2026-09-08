@@ -44,21 +44,25 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 
 ```
 src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
-src/app/(app)/  在庫・履歴・補充・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
+src/app/(app)/  在庫・期限・履歴・補充・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
 src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
-src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations）と、DBを触るservice・queries
+src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations・expiry）と、DBを触るservice・queries・settings
 src/lib/replenishment/ 補充ドメイン（#6）。不足量の算出（shortage）・入力の読み取り（rules）と、service・queries
 src/lib/notion/    Notion買い物リストへの送信（config・client）。読み取りAPIは使わない
+src/lib/notifications/ 通知（#5）。チャネル境界（channels）・重複防止（service）・期限ジョブ（expiry-job）
+src/lib/time/   日付の境目（tokyo.ts）。期限の「今日」はここだけで決める
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/components/replenishment/ 補充基準のフォーム
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
+docs/           テスト戦略・検証基準（testing-strategy.md）とバックアップ・復元手順（backup-restore.md）
 db-tests/       実DB（MySQL/MariaDB）に接続して複合外部キー等のDB制約を検証するテスト（#18）。
                 `pnpm test:unit`とは別に`pnpm test:db`で実行する
-scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する）
+scripts/        開発・運用スクリプト（dev.shはPORTを解決してdevサーバーを起動する。
+                run-expiry-notifications.tsは`pnpm job:expiry`＝期限通知のバッチ）
 deploy/         PM2のecosystem.config.js。本番のプロセス名は`stockly`で待受は3116
 .github/        CI（ci.yml）とissue-deckの各caller、Signaly通知スクリプト、secrets-manifest.tsv
 ```
@@ -75,6 +79,11 @@ pnpm build:ci
 ```
 
 `typecheck`は`next typegen && tsc --noEmit`、DBを使う`build:ci`は`prisma generate && next build`。
+`build:ci`の後に`bash scripts/check-dev-login-disabled.sh`（本番ビルドを実起動し、開発用ログインが404で
+未ログインが`/login`へ戻ることをHTTPで確かめるスモーク。#13）もCIの`lint-and-build`で実行する。
+**どの層で何をテストするか・機能Issueが同梱すべきテスト・セキュリティ検証の一覧は
+[docs/testing-strategy.md](docs/testing-strategy.md)**、バックアップ・復元・履歴からの再構築は
+[docs/backup-restore.md](docs/backup-restore.md)にある。
 `test:unit`はNode標準の`node --test`で`src/**/*.test.ts`を実行する（テストランナーの依存は入れていない）。
 テストからの相対importは`./access.ts`のように拡張子を付ける（Nodeが拡張子付きしか解決しないため。
 tsconfigの`allowImportingTsExtensions`はこのために有効にしている）。DB・外部サービスには接続しない。
@@ -93,6 +102,14 @@ DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため
 環境では実行しない・できない。ローカルで動かす場合は`pnpm db:migrate:deploy` → `pnpm db:seed`の
 あとに`pnpm test:db`を実行する。`db-tests/**/*.test.ts`は`node --test`が.env.localを読まない
 ため、`db-tests/helpers.ts`が`dotenv`で明示的に読み込む。
+**db-testsが作った家庭の後始末は`deleteHousehold()`を使い、`prisma.household.delete()`を直接呼ばない。**
+`Household`の削除はCascadeで配下へ伝わるが、`StockLot → Product`と`REVERSAL → 取消対象`が`Restrict`のため、
+在庫と履歴を持つ家庭はMariaDBのエラー1217で消せない（Cascadeの伝播順は保証されない）。ヘルパーは
+取消行 → 履歴 → ロット → 家庭の順に消す。以前は失敗を握り潰していたため、実行のたびに検証用の家庭が
+残り続けていた（#13）。
+**同じ外部キー違反でも、CIのMySQL 8は1452（Prismaの`P2003`）、ローカル・本番のMariaDBは1216
+（`PrismaClientUnknownRequestError`）を返すことがある。** 違反を期待するテストは両方を受ける
+（`household-boundary.test.ts`の`isForeignKeyViolation()`）。
 `.github/workflows/ci.yml`には`lint-and-build`とは別に`db-constraint-tests`ジョブがあり、
 MySQLのサービスコンテナに対して`prisma migrate deploy` → `prisma db seed` → `pnpm test:db`を
 実行する。**このジョブはbranch protectionの必須チェックには含めていない**（必須チェックは
@@ -118,6 +135,9 @@ Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issu
 CIのジョブ名`lint-and-build`は`develop`・`main`のbranch protectionの必須チェックであり、
 ワークフロー名`CI`は`claude-ci-fix.yml`と`claude-conflict-resolve.yml`が購読している。
 どちらも変更すると無言で止まるため、変える場合は参照側もあわせて直す。
+
+`StockLot.quantity`が履歴とずれたときは`pnpm db:rebuild-quantities`（dry-run）で一覧し、
+`-- --apply`で履歴の合計へ戻す（`src/lib/inventory/rebuild.ts`。手順は`docs/backup-restore.md`）。
 
 **`lint-and-build`の検証ステップを増やしたら、`claude-ci-fix.yml`と`claude-pr-repair.yml`の
 `verify-commands`も同じ内容へ直す。** あの文字列は無人修復エージェントへのプロンプトへそのまま
@@ -226,6 +246,36 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   設定していない任意のプロパティは送らない——存在しないプロパティを送るとNotionが400を返すため）
 - 送信は1件ずつ`SEND_INTERVAL_MS`（400ms）空け、1回の送信は`MAX_SEND_BATCH_SIZE`（20件）まで。
   Notionのレート制限（平均3リクエスト/秒）に触れないための歯止め
+
+## 期限と通知
+
+期限の判定（#5）は次の3点が前提。
+
+- **「今日」は日本時間で決める**（`src/lib/time/tokyo.ts`）。期限の列はMySQLの`DATE`で、Prismaは
+  UTC0時の`Date`として返す。ここでUTC基準に数えると**JSTの0時〜9時のあいだだけ判定が1日ずれる**
+  （朝8時に開くと、今日切れる在庫が「今日まで」のままになる）。日付の引き算は`tokyoDaysBetween()`を通す。
+  日付の列も時刻を持つ値も同じ関数で扱える（UTC0時 + 9時間は同じ日の朝9時なので日付が変わらない）
+- **期限が入っていない在庫は`UNKNOWN`（要確認）で、`FINE`（期限内）に混ぜない。** 混ぜると、期限を
+  入れ忘れた在庫が「期限内」として数えられ、そのまま古くなる。件数（`summarizeExpiry()`）でも
+  絞り込み（`?expiry=unknown`）でも独立して数える
+- **接近日数は賞味期限と消費期限で別に持つ**（既定7日・3日。`ExpirySetting`）。設定が無い家庭は
+  `DEFAULT_EXPIRY_POLICY`で動くので、家庭を作るたびに設定行を用意しなくてよい
+
+通知は`src/lib/notifications/`。
+
+- **重複防止は専用のフラグを持たず、`@@unique([householdId, channel, dedupeKey])`で行う**
+  （在庫の二重送信対策と同じ考え方）。2回目のINSERTは弾かれるので、そのとき既存行の
+  `suppressedCount`を増やす。「送らなかったこと」も記録に残す
+- **dedupeKeyに日付を入れない。** 対象ロットと状態（`lotId:status`）の指紋から作るため、状況が
+  変わらないかぎり何度実行しても届かず、期限間近→期限切れのように**変わったときだけ**もう一度届く。
+  日付を入れると毎日必ず鳴り、ロットidだけにすると状態が変わっても鳴らない
+- **送信に失敗した行は`dedupeKey`を`failed:<id>`へ退避する。** そのまま残すと次回が「送信済み」と
+  見なされ、永久に届かない
+- **`channels.ts`・`service.ts`・`expiry-job.ts`では`@/`エイリアスを使わない。** `pnpm job:expiry`が
+  `node`から直接読むため（seed.tsと同じ制約）。PrismaClientは引数で受け取る。
+  画面から呼ぶ読み取り（`inbox.ts`）は`scopeToHousehold()`を通す通常の画面用モジュール
+- 送り先は`STOCKLY_NOTIFY_CHANNELS`（既定は`IN_APP`）。メール・LINE等の外部サービスは未実装で、
+  追加にはユーザー確認が要る。**定期実行（cron）の登録はVPS側の手作業**で、このリポジトリには入っていない
 
 ## 認証と家庭の境界
 

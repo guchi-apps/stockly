@@ -26,8 +26,20 @@ after(async () => {
   await prisma.$disconnect();
 });
 
+/**
+ * 外部キー違反か。
+ *
+ * MySQLはエラー1452を返し、PrismaはそれをP2003へ対応づける。MariaDBは同じ違反でも
+ * 参照先の一部がNULL可能な複合外部キー（`memberId`など）で**エラー1216**を返すことがあり、
+ * Prismaはこれを`PrismaClientUnknownRequestError`のまま投げる（P2003にならない）。
+ * どちらの環境（CIはMySQL 8、ローカル・本番はMariaDB）でも同じテストが通るよう両方を受ける。
+ */
 function isForeignKeyViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003";
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code === "P2003";
+  return (
+    error instanceof Prisma.PrismaClientUnknownRequestError &&
+    /foreign key constraint fails/i.test(error.message)
+  );
 }
 
 test("他家庭の商品を参照するStockLotはINSERTできない", async () => {
@@ -92,4 +104,79 @@ test("指定した保管場所の配下にないStoragePositionを参照するSt
       }),
     isForeignKeyViolation,
   );
+});
+
+// --- 入出庫履歴（InventoryTransaction）の越境（#13） ---
+//
+// 在庫を変える処理は`service.ts`が`scopeToHousehold()`で得た`householdId`しか使わないが、
+// そこを迂回した書き込み（直接SQL・別経路のバグ）が他家庭のロットや記録者を指せないことを、
+// 複合外部キーでDB側にも担保させている。IDOR（他家庭のidを渡す）の最後の砦にあたる。
+
+test("他家庭のロットを参照するInventoryTransactionはINSERTできない", async () => {
+  const owner = await createHousehold("db-test household（ロットの所有側）");
+  const intruder = await createHousehold("db-test household（他家庭のロットへ記録しようとする側）");
+  createdHouseholdIds.push(owner.id, intruder.id);
+
+  const ownerProduct = await createProduct(owner.id, "商品");
+  const ownerLot = await prisma.stockLot.create({
+    data: { householdId: owner.id, productId: ownerProduct.id, unit: "PIECE" },
+  });
+  const intruderProduct = await createProduct(intruder.id, "商品");
+
+  await assert.rejects(
+    () =>
+      prisma.inventoryTransaction.create({
+        data: {
+          householdId: intruder.id,
+          stockLotId: ownerLot.id,
+          productId: intruderProduct.id,
+          type: "CONSUME",
+          quantityDelta: "-1",
+          unit: "PIECE",
+          occurredAt: new Date(),
+        },
+      }),
+    isForeignKeyViolation,
+  );
+});
+
+test("他家庭のメンバーを記録者にしたInventoryTransactionはINSERTできない", async () => {
+  const owner = await createHousehold("db-test household（記録先）");
+  const other = await createHousehold("db-test household（メンバーの所属先）");
+  createdHouseholdIds.push(owner.id, other.id);
+
+  const user = await prisma.user.create({
+    data: { supabaseUserId: `db-test-${owner.id}`, name: "db-test user" },
+  });
+  const otherMember = await prisma.householdMember.create({
+    data: { householdId: other.id, userId: user.id },
+  });
+
+  const product = await createProduct(owner.id, "商品");
+  const lot = await prisma.stockLot.create({
+    data: { householdId: owner.id, productId: product.id, unit: "PIECE" },
+  });
+
+  try {
+    await assert.rejects(
+      () =>
+        prisma.inventoryTransaction.create({
+          data: {
+            householdId: owner.id,
+            stockLotId: lot.id,
+            productId: product.id,
+            memberId: otherMember.id,
+            type: "PURCHASE",
+            quantityDelta: "1",
+            unit: "PIECE",
+            occurredAt: new Date(),
+          },
+        }),
+      isForeignKeyViolation,
+    );
+  } finally {
+    // Userは家庭のCascadeでは消えないので、ここで消す（所属は家庭ごと消える）。
+    await prisma.householdMember.deleteMany({ where: { userId: user.id } });
+    await prisma.user.delete({ where: { id: user.id } });
+  }
 });

@@ -15,8 +15,16 @@ after(async () => {
   await prisma.$disconnect();
 });
 
+// scripts/seed-dev.mjs・prisma/seed.ts が使う「開発用の家」のid。
+// 他のテスト（rebuild-quantities.test.ts）は自前の家庭で集計値をわざと壊すため、
+// 全家庭を見ると並行実行時に巻き込まれる。seedの家庭だけを対象にする。
+const SEED_HOUSEHOLD_ID = "dev-household-own";
+
 test("seed投入後、全StockLotのquantityが入出庫履歴の合計と一致する", async () => {
-  const lots = await prisma.stockLot.findMany({ include: { transactions: true } });
+  const lots = await prisma.stockLot.findMany({
+    where: { householdId: SEED_HOUSEHOLD_ID },
+    include: { transactions: true },
+  });
 
   assert.ok(
     lots.length > 0,

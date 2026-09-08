@@ -20,6 +20,7 @@ import { requireInventoryContextForAction } from "@/lib/inventory/context";
 import {
   InventoryInputError,
   RECORDABLE_TYPE_LABELS,
+  parseExpirySettingsForm,
   parseOperationId,
   parseRecordForm,
   parseStockLotForm,
@@ -37,12 +38,19 @@ import {
   reverseTransaction,
   updateStockLot,
 } from "@/lib/inventory/service";
+import { saveExpirySettings } from "@/lib/inventory/settings";
+import {
+  countUnreadNotifications,
+  markNotificationsRead,
+  runExpiryCheckForHousehold,
+} from "@/lib/notifications/inbox";
 
 import { backPath, rawInput, str, userFacingMessage, withParams } from "./action-result";
 import type { InventoryFormState } from "./form-state";
 
 function revalidateInventory(): void {
   revalidatePath("/inventory");
+  revalidatePath("/expiry");
   revalidatePath("/history");
   revalidatePath("/storage");
 }
@@ -290,4 +298,79 @@ export async function deleteStoragePositionAction(formData: FormData): Promise<v
 
   revalidateInventory();
   redirect(withParams("/storage", outcome));
+}
+
+// ---------------------------------------------------------------------------
+// 期限の設定と通知
+// ---------------------------------------------------------------------------
+
+export async function saveExpirySettingsAction(
+  _prevState: InventoryFormState,
+  formData: FormData,
+): Promise<InventoryFormState> {
+  const ctx = await requireInventoryContextForAction();
+  const input = rawInput(formData);
+
+  const parsed = parseExpirySettingsForm(input);
+  if (!parsed.ok) return { errors: parsed.errors, values: input };
+
+  try {
+    await saveExpirySettings(ctx, parsed.value);
+  } catch (error) {
+    return { errors: { form: userFacingMessage(error) }, values: input };
+  }
+
+  revalidateInventory();
+  redirect(withParams("/expiry/settings", { notice: "期限の設定を保存しました。" }));
+}
+
+/**
+ * いま期限を確認して、必要なら通知を作る（cronと同じ処理を手で1回動かす）。
+ *
+ * 前回から状況が変わっていなければ何も送らない。**その場合も「送らなかった」と伝える。**
+ * 押しても何も起きないように見えると、通知そのものが壊れているのか、送るものが無いのかが
+ * 利用者に区別できない。
+ */
+export async function runExpiryCheckAction(formData: FormData): Promise<void> {
+  const back = backPath(formData, "/expiry");
+  const ctx = await requireInventoryContextForAction();
+  let outcome: { notice?: string; error?: string };
+
+  try {
+    const summary = await runExpiryCheckForHousehold(ctx);
+    const skipped = summary.details[0]?.skipped ?? null;
+
+    outcome =
+      summary.failed > 0
+        ? { error: "通知を送れませんでした。時間をおいてもう一度お試しください。" }
+        : summary.sent > 0
+          ? { notice: `期限の通知を${summary.sent}件送りました。` }
+          : skipped === "notify-disabled"
+            ? { notice: "通知は設定でオフになっています。" }
+            : skipped === "no-targets"
+              ? { notice: "期限切れ・期限間近の在庫はありませんでした。" }
+              : { notice: "前回から変わりがないため、通知は送っていません。" };
+  } catch (error) {
+    outcome = { error: userFacingMessage(error) };
+  }
+
+  revalidateInventory();
+  redirect(withParams(back, outcome));
+}
+
+export async function markNotificationsReadAction(formData: FormData): Promise<void> {
+  const back = backPath(formData, "/expiry");
+  const ctx = await requireInventoryContextForAction();
+  let outcome: { notice?: string; error?: string };
+
+  try {
+    const unread = await countUnreadNotifications(ctx);
+    await markNotificationsRead(ctx);
+    outcome = { notice: unread > 0 ? `${unread}件を既読にしました。` : "未読のお知らせはありません。" };
+  } catch (error) {
+    outcome = { error: userFacingMessage(error) };
+  }
+
+  revalidateInventory();
+  redirect(withParams(back, outcome));
 }

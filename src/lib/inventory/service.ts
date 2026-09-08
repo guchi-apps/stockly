@@ -389,6 +389,7 @@ export async function createStockLot(
           unit: params.unit,
           bestBeforeDate: params.expiryKind === "BEST_BEFORE" ? params.expiryDate : null,
           useByDate: params.expiryKind === "USE_BY" ? params.expiryDate : null,
+          noExpiry: params.expiryKind === "NONE",
           openedAt: params.opened ? new Date() : null,
           note: params.note,
           status: "ACTIVE",
@@ -505,6 +506,7 @@ export async function updateStockLot(
           storagePositionId: params.storagePositionId,
           bestBeforeDate: params.expiryKind === "BEST_BEFORE" ? params.expiryDate : null,
           useByDate: params.expiryKind === "USE_BY" ? params.expiryDate : null,
+          noExpiry: params.expiryKind === "NONE",
           // すでに開封済みなら開封日時はそのまま残す（編集のたびに今日へ動かさない）。
           openedAt: params.opened ? (lot.openedAt ?? new Date()) : null,
           note: params.note,
