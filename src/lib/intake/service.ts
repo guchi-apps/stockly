@@ -335,8 +335,10 @@ export async function deleteAllIntakeImages(
  * **欄ごとの優先順位づけは`buildStockLotCandidate()`に任せる**（#9と同じ関数）。
  * ここが決めるのは「AIの読みをどの欄へ渡すか」までで、既知の値との強弱は足さない。
  *
- * `master`（バーコードの商品マスタ）は渡さない。写真からはコードを読まないので、
- * 「バーコード由来」と表示できる値がそもそも無いため（出所のチップが嘘になる）。
+ * **写真から読んだ商品名が既存の商品と一致したら、その商品マスタ（`Product`）も渡す。**
+ * #52でカテゴリと既定の単位の正本が`Product`へ一本化されたため、マスタから採る値が
+ * 「その家庭で最後に確定した値」そのものになる。渡さないと、確定済みのカテゴリ・単位を
+ * 無視してAIの読みを採ってしまう。
  */
 async function saveCandidates(
   householdId: string,
@@ -361,10 +363,11 @@ async function saveCandidates(
   const rows: Prisma.IntakeCandidateCreateManyInput[] = [];
 
   for (const item of items) {
-    const rule = item.productName ? await findConfirmedRule(householdId, item.productName) : null;
+    const memory = item.productName ? await findProductMemory(householdId, item.productName) : null;
 
     const candidate = buildStockLotCandidate({
-      rule,
+      rule: memory?.rule ?? null,
+      master: memory?.master ?? null,
       ai: {
         productName: item.productName,
         categoryName: item.categoryName,
@@ -438,35 +441,40 @@ function toDecimal(value: number | null): Prisma.Decimal | null {
   return value === null ? null : new Prisma.Decimal(value);
 }
 
-/** その商品で最後に確定した内容（`ProductRule`）。無ければ`null`。 */
-async function findConfirmedRule(householdId: string, productName: string) {
+/**
+ * 写真から読んだ商品名で、その家庭が覚えている内容を引く。見つからなければ`null`。
+ *
+ * **カテゴリと既定の単位は`Product`から採る**（#52で正本が一本化された）。置き場所と期限だけが
+ * `ProductRule`にある。この2つを分けて返すのは、`buildStockLotCandidate()`が
+ * 「マスタ（`Product`）」と「確定済みルール（`ProductRule`）」を別の段として扱うため。
+ */
+async function findProductMemory(householdId: string, productName: string) {
   const product = await db.product.findFirst({
     where: { householdId, name: productName },
     select: {
+      name: true,
+      defaultUnit: true,
       category: { select: { name: true } },
       rule: {
         select: {
-          unit: true,
           storageLocationId: true,
           storagePositionId: true,
           expiryKind: true,
           shelfLifeDays: true,
           confirmedCount: true,
-          category: { select: { name: true } },
         },
       },
     },
   });
-  if (!product?.rule) return null;
+  if (!product) return null;
 
   return {
-    categoryName: product.rule.category?.name ?? product.category?.name ?? null,
-    unit: product.rule.unit,
-    storageLocationId: product.rule.storageLocationId,
-    storagePositionId: product.rule.storagePositionId,
-    expiryKind: product.rule.expiryKind,
-    shelfLifeDays: product.rule.shelfLifeDays,
-    confirmedCount: product.rule.confirmedCount,
+    master: {
+      productName: product.name,
+      categoryName: product.category?.name ?? null,
+      defaultUnit: product.defaultUnit,
+    },
+    rule: product.rule,
   };
 }
 
