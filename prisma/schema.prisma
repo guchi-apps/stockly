@@ -75,6 +75,10 @@ model Household {
   // 防災ストックの判定（#7）。
   disasterPlanSetting DisasterPlanSetting?
 
+  // 防災バッグの点検（#8）。
+  disasterBags            DisasterBag[]
+  disasterBagInspections  DisasterBagInspection[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -442,6 +446,8 @@ model StorageLocation {
   positions    StoragePosition[]
   stockLots    StockLot[]
   productRules ProductRule[]
+  /// 防災バッグとして点検するときの基準（#8）。種別がEMERGENCY_STOCKの保管場所だけが持つ。
+  disasterBag  DisasterBag?
 
   @@unique([householdId, id])
   @@unique([householdId, name])
@@ -794,4 +800,73 @@ model DisasterPlanSetting {
   household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
 
   @@unique([householdId, id])
+}
+
+/// 防災バッグの点検の基準（#8）。
+///
+/// **バッグの実体は`StorageLocation`（種別`EMERGENCY_STOCK`）で、ここはそこに
+/// 「点検の単位として見るときの目標」を足すだけの拡張。** 防災用の別在庫は作らない
+/// （日常の在庫から集計するというアプリの前提を崩さないため）。
+///
+/// 行が無いバッグは`DEFAULT_DISASTER_BAG_PLAN`（`src/lib/disaster/bag.ts`）で動く。
+/// **スキーマの`@default`とコードの既定値は別々に書いてあるので、片方だけ変えないこと**
+/// （`DisasterPlanSetting`と同じ約束）。
+model DisasterBag {
+  id                String @id @default(cuid())
+  householdId       String
+  /// このバッグにあたる保管場所。1つの保管場所につき1行だけ持つ。
+  storageLocationId String
+
+  /// このバッグ1つで何人・何日ぶんを目指すか。
+  ///
+  /// **家庭全体の基準（`DisasterPlanSetting`）とは別に持つ。** 持ち出し袋に家全体の
+  /// 3日ぶんを求めるとどのバッグも常に不足になり、点検の役に立たない。
+  peopleCount Int @default(1)
+  targetDays  Int @default(1)
+
+  /// 何日ごとに点検するか。最後の点検日にこれを足したものが次回の予定になる。
+  inspectionIntervalDays Int @default(180)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household       Household               @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  storageLocation StorageLocation         @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  inspections     DisasterBagInspection[]
+
+  @@unique([householdId, id])
+  /// 1つの保管場所につき1行。2行目を作らせない。
+  @@unique([householdId, storageLocationId])
+}
+
+/// 防災バッグを点検した記録（#8）。
+///
+/// **ここに残すのは「そのとき人が見た結果」で、充足の判定結果そのものは保存しない**
+/// （在庫が動けば変わるため。#7の方針と同じ）。件数だけは点検時点の状態として残す——
+/// 後から「前回はいくつ手当てが要ったか」を振り返れるようにするため、再計算では出せない。
+model DisasterBagInspection {
+  id            String @id @default(cuid())
+  householdId   String
+  disasterBagId String
+
+  /// 点検した日（日本時間の日付）。時刻は持たない。
+  inspectedOn DateTime @db.Date
+  note        String?  @db.VarChar(500)
+
+  /// 点検した時点の中身の件数と、手当てが要ったものの件数。
+  itemCount          Int @default(0)
+  expiredCount       Int @default(0)
+  expiringSoonCount  Int @default(0)
+  unknownExpiryCount Int @default(0)
+
+  /// 記録した時点の判定ルールの版（`DISASTER_RULE_VERSION`）。
+  ruleVersion String @db.VarChar(20)
+
+  createdAt DateTime @default(now())
+
+  household   Household   @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  disasterBag DisasterBag @relation(fields: [householdId, disasterBagId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  @@index([householdId, disasterBagId, inspectedOn])
 }

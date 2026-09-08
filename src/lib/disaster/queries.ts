@@ -35,7 +35,7 @@ async function scope(ctx: InventoryContext): Promise<string> {
  * 持っていない値は並べない（＝その次元の区分では、この在庫は数えられない）。
  * `src/lib/replenishment/queries.ts`と同じ考え方で、補充と防災で挙動を変えない。
  */
-function perUnitEquivalentsOf(product: {
+export function perUnitEquivalentsOf(product: {
   contentAmount: Decimal | null;
   contentUnit: UnitCode | null;
   servingsPerUnit: Decimal | null;

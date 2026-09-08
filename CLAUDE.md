@@ -51,13 +51,14 @@ src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現�
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
 src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations・expiry）と、DBを触るservice・queries・settings
 src/lib/replenishment/ 補充ドメイン（#6）。不足量の算出（shortage）・入力の読み取り（rules）と、service・queries
-src/lib/disaster/ 防災ドメイン（#7）。区分と必要量の定義（rules）・判定（assess）と、queries・settings
+src/lib/disaster/ 防災ドメイン（#7・#8）。区分と必要量の定義（rules）・判定（assess）と、queries・settings。
+                   バッグの点検（bag・bag-queries）は判定を呼ぶだけで、判定ルールを持たない
 src/lib/notion/    Notion買い物リストへの送信（config・client）。読み取りAPIは使わない
 src/lib/notifications/ 通知（#5）。チャネル境界（channels）・重複防止（service）・期限ジョブ（expiry-job）
 src/lib/time/   日付の境目（tokyo.ts）。期限の「今日」はここだけで決める
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/components/replenishment/ 補充基準のフォーム
-src/components/disaster/ 防災の集計の見せ方（coverage-summary）と基準のフォーム
+src/components/disaster/ 防災の集計の見せ方（coverage-summary）・基準のフォームと、バッグの点検（bag-inspection・bag-forms）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
 docs/           テスト戦略・検証基準（testing-strategy.md）とバックアップ・復元手順（backup-restore.md）
@@ -134,6 +135,15 @@ JSを読まない`curl`でも、Next.jsがフォームへ埋める`$ACTION_ID_�
 200で返るだけ**なので、成功したように見えて何も起きない。`curl -F "$ACTION_ID_…=" -F "<欄>=<値>"`とし、
 `Location`ヘッダーの`?notice=`／`?error=`で結果を見る（サーバーコンポーネントのフォームだけ。
 `useActionState`を使うクライアント側のフォームはHTMLにIDが出ないので、この手では叩けない）。
+
+**`useActionState`のフォームをcurlで叩くときは、フォームの欄を`0`より前に置く**（#8）。
+サーバーコンポーネントのフォームと違い`$ACTION_ID_…`はHTMLに出ないので、`Next-Action:<id>`
+ヘッダーで叩くことになる。idは`.next/dev/server/server-reference-manifest.json`にある
+（`.next/server/…`のほうは本番ビルドのidで、devでは404になる）。引数は
+`-F '_1_<欄>=<値>' … -F '0=[{"errors":{},"values":{}},"$K1"]'`の形で、**FormDataの部品
+（`_1_…`）を`0`より先に送る**。Reactは`0`を読んだ時点でFormData参照を解決するため、
+後ろに置くと**エラーにならず、空のFormDataがアクションへ渡る**（欄を1つも入力していない
+ときと同じ応答が返るので、送れているように見えて気付きにくい）。
 
 **外部APIの入口（base URL）は設定値にしておく**（#6の`NOTION_API_BASE_URL`）。ローカルに数十行の
 スタブを立てて向ければ、送信・再送・失敗・復旧までを実際に流して確かめられる。本番の値を
@@ -317,6 +327,33 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   ②ルール版・基準・根拠ロット・除外理由をすべて画面に出す
   ③`assess.ts`が純関数で、同じ入力なら必ず同じ結果になる——の3つで満たす。
   **同じ在庫から違う数字が出るようになったら版を上げる**（文言や並び順だけの変更では上げない）
+
+## 防災バッグの点検（#8）
+
+`/disaster`の集計とは別に、**バッグ1つを点検の単位として見る**画面（`/disaster/bags`）。
+判定は`assess.ts`をそのまま呼び、**UI側にもバッグ側にも判定ルールを持たない**（受入条件）。
+
+- **バッグの実体は`StorageLocation`（種別`EMERGENCY_STOCK`）**で、中身は普通の`StockLot`。
+  防災用の別在庫は作らない。新しいモデル（`DisasterBag`）が足すのは「点検の単位として見るときの
+  目標」だけで、バッグそのものではない
+- **バッグの目標は家庭全体（既定2人・3日）とは別に持つ**（既定1人・1日・180日ごとに点検）。
+  持ち出し袋に家全体の3日ぶんを求めるとどのバッグも常に不足になり、点検の役に立たない。
+  重ねるのは**人数と日数だけ**で、1人1日あたりの必要量も「冷蔵を数えるか」も家庭の基準を使う
+  （`bag.ts`の`toBagPlan()`）。バッグごとに変えられるようにすると、同じ在庫が置き場所で
+  違う扱いになる
+- **「手当てが要るもの」は充足の除外理由とは別の観点**（`bag.ts`の`attentionOf()`）。除外理由は
+  「非常時に数えられるか」、点検は「いま人が手を入れるべきか」を答える。期限間近は算入されるが
+  点検では入れ替えの対象に出す。**1件につき理由は1つだけ**にする（2か所で数えると合計が中身の
+  件数を超えて読めなくなる）。**0件の観点も畳まない**——見ていないのか0件だったのかを分けるため
+- **点検の記録（`DisasterBagInspection`）は「人が見た」ことの記録で、充足の判定結果は保存しない**
+  （#7の方針どおり）。件数だけは点検時点の状態として残す（後から再計算では出せないため）。
+  **件数は保存の直前に数え直す**——画面を開いてから記録するまでに在庫が動くため
+- **未点検（`NEVER`）と期限切れ（`OVERDUE`）を分ける。** 「まだ始めていない」と「期限を過ぎた」では
+  次にやることが違う。次回の予定日は最終点検日＋間隔で、**日付の加算は日本時間の通し番号の上で行う**
+  （`bag.ts`の`nextInspectionDueOn()`。`Date`のミリ秒に日数を足すと、期限の列と同じUTC0時に戻らない）
+- **不足は色だけで表さない。** 充足率（%）・「不足／充足」の語・記号を必ず併記し、バーの足りない
+  部分は斜線にする（`coverage-summary.tsx`の`CoverageBar`）。受入条件の「色だけに依存せず
+  不足を表現する」はこの形で満たす
 
 ## 画面の行き先（ナビ）
 
