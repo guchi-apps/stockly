@@ -5,9 +5,13 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-import { Prisma } from "@prisma/client";
-
-import { createHousehold, createProduct, deleteHousehold, prisma } from "./helpers.ts";
+import {
+  createHousehold,
+  createProduct,
+  deleteHousehold,
+  isUniqueViolation,
+  prisma,
+} from "./helpers.ts";
 
 const createdHouseholdIds: string[] = [];
 
@@ -56,7 +60,6 @@ test("同じInventoryTransactionを二重に取り消せない", async () => {
   // 同じtransactionへの2回目の取消は拒否される。
   await assert.rejects(
     () => prisma.inventoryTransaction.create({ data: reversalInput }),
-    (error: unknown) =>
-      error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002",
+    isUniqueViolation,
   );
 });

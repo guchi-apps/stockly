@@ -8,6 +8,11 @@
  * 家庭1つぶんの在庫はせいぜい数百件なので、並べ替えは取得後にまとめて行う。
  * 「期限が無いものを最後に置く」がSQLでは書きにくく、DBごとのNULLの扱いに引きずられるため。
  */
+import {
+  buildStockLotCandidate,
+  type StockLotCandidate,
+} from "@/lib/barcode/candidate";
+import type { BarcodeSymbology } from "@/lib/barcode/code";
 import { db } from "@/lib/db";
 import { scopeToHousehold } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
@@ -71,6 +76,8 @@ export async function listStockLots(ctx: InventoryContext, filter: InventoryFilt
             OR: [
               { product: { name: { contains: q } } },
               { product: { brand: { contains: q } } },
+              // 商品名を変えたあとも、バーコードで登録したときの名前で見つかるようにする（#9）。
+              { product: { aliases: { some: { alias: { contains: q } } } } },
               { note: { contains: q } },
             ],
           }
@@ -265,4 +272,162 @@ export async function listReversedTransactionIds(ctx: InventoryContext): Promise
 export async function countStockLots(ctx: InventoryContext): Promise<number> {
   const householdId = await scope(ctx);
   return db.stockLot.count({ where: { householdId, status: "ACTIVE" } });
+}
+
+// ---------------------------------------------------------------------------
+// バーコード（#9）
+// ---------------------------------------------------------------------------
+
+/**
+ * 読み取ったコードが誤って別の商品に紐付いていると疑うまでの回数。
+ *
+ * 1回で知らせると、たまたま近い商品を登録しただけで警告が出る。3回続けて別の商品として
+ * 登録されているなら、紐付けのほうが間違っている見込みが高い。
+ */
+export const BARCODE_MISMATCH_THRESHOLD = 3;
+
+export interface BarcodeLookup {
+  readonly code: string;
+  readonly symbology: BarcodeSymbology;
+  /** 紐付いている商品。未登録のコードなら`null`。 */
+  readonly product: {
+    readonly id: string;
+    readonly name: string;
+    readonly brand: string;
+  } | null;
+  /** 前回の内容を埋めた候補と、欄ごとの出所。 */
+  readonly candidate: StockLotCandidate;
+}
+
+/**
+ * コードから登録の候補を引く。
+ *
+ * 未登録のコードでも例外にせず、`product: null`と空の候補を返す。
+ * 「知らないコードだった」ことは登録画面で案内すべき正常な結果で、失敗ではない。
+ */
+export async function lookupBarcode(
+  ctx: InventoryContext,
+  code: string,
+  today: Date = new Date(),
+): Promise<BarcodeLookup> {
+  const householdId = await scope(ctx);
+
+  const barcode = await db.barcode.findFirst({
+    where: { householdId, code },
+    select: {
+      code: true,
+      symbology: true,
+      product: {
+        select: {
+          id: true,
+          name: true,
+          brand: true,
+          defaultUnit: true,
+          category: { select: { name: true } },
+          rule: {
+            select: {
+              unit: true,
+              storageLocationId: true,
+              storagePositionId: true,
+              expiryKind: true,
+              shelfLifeDays: true,
+              confirmedCount: true,
+              category: { select: { name: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!barcode) {
+    return {
+      code,
+      symbology: "OTHER",
+      product: null,
+      candidate: buildStockLotCandidate({ today }),
+    };
+  }
+
+  const { product } = barcode;
+  const rule = product.rule;
+
+  return {
+    code: barcode.code,
+    symbology: barcode.symbology,
+    product: { id: product.id, name: product.name, brand: product.brand },
+    candidate: buildStockLotCandidate({
+      rule: rule
+        ? {
+            categoryName: rule.category?.name ?? null,
+            unit: rule.unit,
+            storageLocationId: rule.storageLocationId,
+            storagePositionId: rule.storagePositionId,
+            expiryKind: rule.expiryKind,
+            shelfLifeDays: rule.shelfLifeDays,
+            confirmedCount: rule.confirmedCount,
+          }
+        : null,
+      master: {
+        productName: product.name,
+        categoryName: product.category?.name ?? null,
+        defaultUnit: product.defaultUnit,
+      },
+      today,
+    }),
+  };
+}
+
+export type BarcodeRow = Awaited<ReturnType<typeof listBarcodes>>[number];
+
+/**
+ * 登録済みのコード一覧。誤紐付けの疑いがあるものを先頭へ置く。
+ *
+ * 並べ替えを取得後に行うのは、`mismatchCount`のしきい値との比較がSQLでは書きにくく、
+ * 家庭1つぶんのコードはせいぜい数百件だから（在庫一覧と同じ方針）。
+ */
+export async function listBarcodes(ctx: InventoryContext) {
+  const householdId = await scope(ctx);
+
+  const barcodes = await db.barcode.findMany({
+    where: { householdId },
+    select: {
+      id: true,
+      code: true,
+      symbology: true,
+      source: true,
+      sourceName: true,
+      fetchedAt: true,
+      useCount: true,
+      lastUsedAt: true,
+      mismatchCount: true,
+      product: { select: { id: true, name: true, brand: true } },
+    },
+  });
+
+  return barcodes
+    .map((barcode) => ({
+      ...barcode,
+      suspect: barcode.mismatchCount >= BARCODE_MISMATCH_THRESHOLD,
+    }))
+    .sort((a, b) => {
+      if (a.suspect !== b.suspect) return a.suspect ? -1 : 1;
+      const left = a.lastUsedAt?.getTime() ?? 0;
+      const right = b.lastUsedAt?.getTime() ?? 0;
+      if (left !== right) return right - left;
+      return a.code.localeCompare(b.code);
+    });
+}
+
+/** 付け替え先として選べる商品。 */
+export async function listProductOptions(ctx: InventoryContext) {
+  const householdId = await scope(ctx);
+
+  const products = await db.product.findMany({
+    where: { householdId },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, brand: true },
+  });
+
+  return products;
 }

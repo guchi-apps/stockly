@@ -57,6 +57,7 @@ model Household {
   categories       Category[]
   products         Product[]
   productAliases   ProductAlias[]
+  productRules     ProductRule[]
   barcodes         Barcode[]
   storageLocations StorageLocation[]
   storagePositions StoragePosition[]
@@ -188,6 +189,24 @@ enum BarcodeSymbology {
   OTHER
 }
 
+/// コードと商品の結び付きが、どうやって決まったか（#9）。
+///
+/// 外部の商品APIはまだ入れていないので、実際に付くのはSCANかMANUALだけ。
+/// EXTERNALは、APIを入れたときに「この紐付けは人ではなくAPIが決めた」と見分けるために置いてある。
+enum BarcodeSource {
+  SCAN // カメラで読み取って登録した
+  MANUAL // コードを手で入力して登録した
+  EXTERNAL // 外部の商品APIの応答から作った
+}
+
+/// 期限の付け方。ロットは賞味期限と消費期限のどちらか一方だけを持つ。
+/// src/lib/inventory/operations.tsの`ExpiryKind`と同じ並びにしてある。
+enum ExpiryKind {
+  NONE
+  BEST_BEFORE
+  USE_BY
+}
+
 enum StockLotStatus {
   ACTIVE // 在庫あり
   DEPLETED // 使い切った
@@ -214,11 +233,12 @@ model Category {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  household Household  @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  household    Household     @relation(fields: [householdId], references: [id], onDelete: Cascade)
   /// 親カテゴリも同じ家庭のものに限る。
-  parent    Category?  @relation("CategoryTree", fields: [householdId, parentId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
-  children  Category[] @relation("CategoryTree")
-  products  Product[]
+  parent       Category?     @relation("CategoryTree", fields: [householdId, parentId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  children     Category[]    @relation("CategoryTree")
+  products     Product[]
+  productRules ProductRule[]
 
   /// 子から[householdId, id]で参照するための一意キー。以下の各モデルにも同じ狙いで置いてある。
   @@unique([householdId, id])
@@ -267,6 +287,8 @@ model Product {
   category     Category?              @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   aliases      ProductAlias[]
   barcodes     Barcode[]
+  /// バーコードから呼び出す候補の最優先の材料（#9）。商品1つにつき0件か1件。
+  rule         ProductRule?
   stockLots    StockLot[]
   transactions InventoryTransaction[]
 
@@ -297,14 +319,38 @@ model ProductAlias {
   @@index([householdId, productId])
 }
 
+/// バーコードと商品の紐付け（#9）。
+///
+/// **1つのコードは家庭内で1商品にしか紐付かない**（`@@unique([householdId, code])`）。
+/// 読み取ったコードから商品が一意に決まらないと候補を出せないため、重複は作らせず、
+/// 間違っていた場合は「付け替え」でこの行のproductIdを差し替える。
 model Barcode {
   id          String           @id @default(cuid())
   householdId String
   productId   String
   code        String
   symbology   BarcodeSymbology @default(JAN)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+
+  /// この紐付けをどうやって決めたか。
+  source     BarcodeSource @default(MANUAL)
+  /// 外部の商品APIから作った場合の出典名（例: `openbd`）。使っていなければ空文字。
+  sourceName String        @default("")
+  /// 外部APIの応答をそのまま残したもの。同じコードを二度問い合わせないためのキャッシュで、
+  /// 中身の形は出典ごとに違う。**アプリの判断はここを読まずに、上の列と商品マスタで行う**
+  /// （出典ごとの形に依存すると、出典を替えたときに壊れる）。
+  sourcePayload Json?
+  /// `sourcePayload`を取得した時刻。キャッシュの鮮度の判定に使う。
+  fetchedAt     DateTime?
+
+  /// このコードで在庫を登録した回数と、最後に登録した時刻。
+  useCount   Int       @default(0)
+  lastUsedAt DateTime?
+  /// 読み取ったのに別の商品として登録された回数。誤紐付けの疑いとして一覧の先頭に出す。
+  /// 付け替えるか「そのままにする」を選んだ時点で0へ戻す。
+  mismatchCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
   product   Product   @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
@@ -312,6 +358,50 @@ model Barcode {
   @@unique([householdId, id])
   @@unique([householdId, code])
   @@index([householdId, productId])
+}
+
+/// 商品ごとの「前回ユーザーが確定した内容」＝学習ルール（#9）。
+///
+/// バーコードから出す候補の優先順位は **確定済みルール > バーコードマスタ > AI候補** で、
+/// これはその最上位。在庫を登録・編集して確定するたびに上書きするので、
+/// AIや外部APIが何を返しても、その家庭で最後に人が決めた値が勝つ。
+///
+/// **商品1つにつき1行**（`@@unique([householdId, productId])`）。履歴として複数世代を残さないのは、
+/// 使うのが常に最新の1件だからで、いつ何を確定したかは`InventoryTransaction`と`StockLot`に残る。
+model ProductRule {
+  id          String @id @default(cuid())
+  householdId String
+  productId   String
+
+  categoryId        String?
+  unit              UnitCode?
+  storageLocationId String?
+  storagePositionId String?
+
+  expiryKind ExpiryKind @default(NONE)
+  /// 登録日から期限までの日数。前回の入力から求め、次回は「今日＋この日数」を既定の日付にする。
+  /// 日付そのものを覚えると、次に買ったときには必ず過ぎている。
+  shelfLifeDays Int?
+
+  /// 確定した回数と最後の時刻。候補の説明（「3回登録しています」）に使う。
+  confirmedCount Int      @default(0)
+  confirmedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household       Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product         Product          @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  category        Category?        @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  storageLocation StorageLocation? @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  /// 詳細位置は「同じ家庭の、指定した保管場所の配下」に限る（StockLotと同じ形）。
+  storagePosition StoragePosition? @relation(fields: [householdId, storageLocationId, storagePositionId], references: [householdId, storageLocationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([householdId, id])
+  @@unique([householdId, productId])
+  @@index([householdId, categoryId])
+  @@index([householdId, storageLocationId])
+  @@index([householdId, storagePositionId])
 }
 
 model StorageLocation {
@@ -324,9 +414,10 @@ model StorageLocation {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  household Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
-  positions StoragePosition[]
-  stockLots StockLot[]
+  household    Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  positions    StoragePosition[]
+  stockLots    StockLot[]
+  productRules ProductRule[]
 
   @@unique([householdId, id])
   @@unique([householdId, name])
@@ -345,6 +436,7 @@ model StoragePosition {
   household       Household       @relation(fields: [householdId], references: [id], onDelete: Cascade)
   storageLocation StorageLocation @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
   stockLots       StockLot[]
+  productRules    ProductRule[]
 
   @@unique([householdId, id])
   @@unique([householdId, storageLocationId, name])

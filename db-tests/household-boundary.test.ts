@@ -6,14 +6,13 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-import { Prisma } from "@prisma/client";
-
 import {
   createHousehold,
   createProduct,
   createStorageLocation,
   createStoragePosition,
   deleteHousehold,
+  isForeignKeyViolation,
   prisma,
 } from "./helpers.ts";
 
@@ -25,10 +24,6 @@ after(async () => {
   }
   await prisma.$disconnect();
 });
-
-function isForeignKeyViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003";
-}
 
 test("他家庭の商品を参照するStockLotはINSERTできない", async () => {
   const owner = await createHousehold("db-test household（商品の所有側）");

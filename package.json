@@ -27,6 +27,7 @@
     "@prisma/client": "^6.19.3",
     "@supabase/ssr": "^0.12.6",
     "@supabase/supabase-js": "^2.115.0",
+    "barcode-detector": "^3.2.2",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.2.6",
     "lucide-react": "^1.42.0",

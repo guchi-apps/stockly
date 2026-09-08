@@ -90,6 +90,10 @@ DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため
 環境では実行しない・できない。ローカルで動かす場合は`pnpm db:migrate:deploy` → `pnpm db:seed`の
 あとに`pnpm test:db`を実行する。`db-tests/**/*.test.ts`は`node --test`が.env.localを読まない
 ため、`db-tests/helpers.ts`が`dotenv`で明示的に読み込む。
+**外部キー違反の判定は`helpers.ts`の`isForeignKeyViolation()`を使い、Prismaの`P2003`だけで
+判定しない。** MySQLは外部キー違反に1452と1216の2つのコードを持ち、どちらを返すかはサーバーの
+ビルドで変わる（CIのmysql:8.0は1452、Ubuntu同梱の8.0.46は1216）。Prismaが`P2003`へ移すのは1452だけなので、
+コードで判定すると制約は効いているのにローカルでだけテストが落ちる。
 `.github/workflows/ci.yml`には`lint-and-build`とは別に`db-constraint-tests`ジョブがあり、
 MySQLのサービスコンテナに対して`prisma migrate deploy` → `prisma db seed` → `pnpm test:db`を
 実行する。**このジョブはbranch protectionの必須チェックには含めていない**（必須チェックは
@@ -187,6 +191,30 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   訂正する手段が無くなる
 - 画面の確認用データは`pnpm db:seed:fixture`（`prisma/fixtures/daily-inventory.ts`）。
   流すたびに`fx-`で始まる在庫・履歴を作り直すので、画面で試した記録が残らない
+
+## バーコードと学習ルール（#9）
+
+- **候補の優先順位は「確定済みルール > バーコードマスタ > AI候補」**。組み立てるのは
+  `src/lib/barcode/candidate.ts`の`buildStockLotCandidate()`（純関数）で、欄ごとにどれを採ったかを
+  一緒に返す。画面はその出所をチップで出す。**強いほうが空でも弱いほうへ落ちるのは値が無いときだけ**で、
+  「新しいほうを採る」といった別の規則を混ぜない
+- **確定済みルール（`ProductRule`）は商品1つにつき1行。** 在庫を登録・編集して確定するたびに上書きする。
+  **期限は日付ではなく日数（`shelfLifeDays`）で覚える**——日付を覚えると、次に買ったときには必ず過ぎている
+- **1つのコードは家庭内で1商品にしか紐付かない**（`@@unique([householdId, code])`）。直す手段は
+  「付け替え」と「解除」だけで、2件目を作らない。付け替えずに別商品として登録されたら
+  `Barcode.mismatchCount`を増やし、3回で誤紐付けの疑いとして`/barcodes`の先頭に出す
+- **コードの値は必ず`parseBarcode()`を通してからDBへ渡す。** 全角・ハイフン・空白の混ざった値を
+  そのまま入れると、同じ商品に見た目違いの紐付けが増える。チェックディジットが合わない値は拒否する
+- **読み取りは`BarcodeDetector`のAPI一本で書く。** 標準実装があるブラウザはそれを使い、無い場合
+  （iOS Safari）だけ`barcode-detector`のponyfill（ZXingのWebAssembly）を**動的import**で読む。
+  静的importにすると、標準実装のある環境へ1MBのwasmを配ることになる
+- **wasmは`public/zxing/zxing_reader-<バージョン>.wasm`から自前配信する**（既定はjsDelivrのCDN）。
+  `zxing-wasm`を上げたらこのファイルも差し替える。ファイル名にバージョンが入っているので、
+  忘れると404で気付ける（黙って古いwasmが使われることはない）
+- **`.wasm`は`src/proxy.ts`のmatcherから外してある。** 通すと読み取りのたびにSupabaseへ往復し、
+  セッションが切れた瞬間にHTMLが返って`WebAssembly.instantiate`が原因の分かりにくい形で落ちる
+- カメラは**httpsかlocalhostでしか使えない**。LANの生IPで開くと`navigator.mediaDevices`自体が
+  生えないため、スマホ実機で試すときは`sslip.io`＋httpsが要る（`sslip-io-lan-dev` skill）
 
 ## 認証と家庭の境界
 

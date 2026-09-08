@@ -12,6 +12,7 @@
  * - 未開封の水10L（2L×5本）と、飲みかけ1本
  * - カップ麺2個
  * - 期限切れのサトウのごはん4パック
+ * - バーコード4件と、そのうち3件ぶんの学習ルール（#9）。1件は誤紐付けの疑いが立った状態にしてある
  *
  * 期限は**流した日からの相対**で入れる。固定日にすると、日が経つほど「期限切れ」「期限間近」
  * 「余裕あり」の3状態が揃わなくなり、確認用としての意味が薄れるため。
@@ -215,6 +216,117 @@ interface FixtureLot {
   }[];
 }
 
+interface FixtureBarcode {
+  id: string;
+  code: string;
+  symbology: "JAN" | "EAN8";
+  productId: string;
+  source: "SCAN" | "MANUAL";
+  useCount: number;
+  lastUsedHoursAgo: number;
+  /** 読み取ったのに別商品として登録された回数。3以上で誤紐付けの疑いとして先頭に出る。 */
+  mismatchCount?: number;
+}
+
+/**
+ * バーコード（#9）。チェックディジットまで正しい値にしてある。
+ *
+ * 画面の手入力欄は不正なコードを弾くので、ここに合わない値を置くと
+ * 「fixtureにはあるのに手で入れ直せない」コードができてしまう。
+ */
+const BARCODES: FixtureBarcode[] = [
+  {
+    id: "fx-barcode-water",
+    code: "4901777018884",
+    symbology: "JAN",
+    productId: "fx-product-water",
+    source: "SCAN",
+    useCount: 4,
+    lastUsedHoursAgo: 24 * 3,
+  },
+  {
+    id: "fx-barcode-cup-noodle",
+    code: "4907773010419",
+    symbology: "JAN",
+    productId: "fx-product-cup-noodle",
+    source: "SCAN",
+    useCount: 2,
+    lastUsedHoursAgo: 24 * 12,
+  },
+  {
+    // 誤紐付けの疑い。読み取ったあと毎回別の商品として登録された状態。
+    id: "fx-barcode-packed-rice",
+    code: "4940257101920",
+    symbology: "JAN",
+    productId: "fx-product-packed-rice",
+    source: "SCAN",
+    useCount: 1,
+    lastUsedHoursAgo: 24 * 30,
+    mismatchCount: 3,
+  },
+  {
+    id: "fx-barcode-toilet-paper",
+    code: "45690228",
+    symbology: "EAN8",
+    productId: "fx-product-toilet-paper",
+    source: "MANUAL",
+    useCount: 1,
+    lastUsedHoursAgo: 24 * 40,
+  },
+];
+
+interface FixtureRule {
+  id: string;
+  productId: string;
+  categoryId: string;
+  unit: UnitCode;
+  storageLocationId: string;
+  storagePositionId?: string;
+  expiryKind: "NONE" | "BEST_BEFORE" | "USE_BY";
+  shelfLifeDays?: number;
+  confirmedCount: number;
+}
+
+/**
+ * 学習ルール（#9）。「前回この商品をどう登録したか」を表す。
+ *
+ * 読み取り後の登録画面で、どの欄が「前回の確定」として埋まるかを確かめるためのもの。
+ * 期限は日数で持つので、いつ流しても次回の既定日が今日からの相対になる。
+ */
+const RULES: FixtureRule[] = [
+  {
+    id: "fx-rule-water",
+    productId: "fx-product-water",
+    categoryId: "fx-category-drink",
+    unit: "BOTTLE",
+    storageLocationId: "fx-location-pantry",
+    storagePositionId: "fx-position-pantry-floor",
+    expiryKind: "BEST_BEFORE",
+    shelfLifeDays: 730,
+    confirmedCount: 4,
+  },
+  {
+    id: "fx-rule-cup-noodle",
+    productId: "fx-product-cup-noodle",
+    categoryId: "fx-category-food",
+    unit: "PIECE",
+    storageLocationId: "fx-location-pantry",
+    storagePositionId: "fx-position-pantry-upper",
+    expiryKind: "BEST_BEFORE",
+    shelfLifeDays: 180,
+    confirmedCount: 2,
+  },
+  {
+    id: "fx-rule-toilet-paper",
+    productId: "fx-product-toilet-paper",
+    categoryId: "fx-category-daily",
+    unit: "ROLL",
+    storageLocationId: "fx-location-emergency-bag",
+    expiryKind: "NONE",
+    confirmedCount: 1,
+  },
+];
+
 const LOTS: FixtureLot[] = [
   {
     id: "fx-lot-emergency-bag",
@@ -358,6 +470,14 @@ const LOTS: FixtureLot[] = [
  * まとめて消すと、同じDELETE文の中で参照先が先に消えて制約違反になりうる。
  */
 async function resetFixtureRows(): Promise<void> {
+  // バーコードと学習ルール（#9）は在庫に依存しないので、ロットの有無にかかわらず作り直す。
+  await prisma.barcode.deleteMany({
+    where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-barcode-" } },
+  });
+  await prisma.productRule.deleteMany({
+    where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-rule-" } },
+  });
+
   const lots = await prisma.stockLot.findMany({
     where: { householdId: HOUSEHOLD_ID, id: { startsWith: "fx-lot-" } },
     select: { id: true },
@@ -498,8 +618,45 @@ async function main(): Promise<void> {
     }
   }
 
+  for (const barcode of BARCODES) {
+    await prisma.barcode.create({
+      data: {
+        id: barcode.id,
+        householdId: HOUSEHOLD_ID,
+        productId: productIds.get(barcode.productId) as string,
+        code: barcode.code,
+        symbology: barcode.symbology,
+        source: barcode.source,
+        useCount: barcode.useCount,
+        lastUsedAt: hoursAgo(barcode.lastUsedHoursAgo),
+        mismatchCount: barcode.mismatchCount ?? 0,
+      },
+    });
+  }
+
+  for (const rule of RULES) {
+    await prisma.productRule.create({
+      data: {
+        id: rule.id,
+        householdId: HOUSEHOLD_ID,
+        productId: productIds.get(rule.productId) as string,
+        categoryId: categoryIds.get(rule.categoryId) ?? null,
+        unit: rule.unit,
+        storageLocationId: locationIds.get(rule.storageLocationId) as string,
+        storagePositionId: rule.storagePositionId
+          ? (positionIds.get(rule.storagePositionId) as string)
+          : null,
+        expiryKind: rule.expiryKind,
+        shelfLifeDays: rule.shelfLifeDays ?? null,
+        confirmedCount: rule.confirmedCount,
+        confirmedAt: hoursAgo(24),
+      },
+    });
+  }
+
   console.log(
-    `fixture投入完了: 保管場所 ${LOCATIONS.length}件 / 商品 ${PRODUCTS.length}件 / 在庫 ${LOTS.length}件`,
+    `fixture投入完了: 保管場所 ${LOCATIONS.length}件 / 商品 ${PRODUCTS.length}件 / ` +
+      `在庫 ${LOTS.length}件 / バーコード ${BARCODES.length}件 / 学習ルール ${RULES.length}件`,
   );
 }
 
