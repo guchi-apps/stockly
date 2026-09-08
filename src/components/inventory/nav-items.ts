@@ -1,4 +1,5 @@
 import {
+  Backpack,
   Boxes,
   CalendarClock,
   History,
@@ -55,8 +56,17 @@ export const ITEMS = [
     href: "/disaster",
     label: "防災",
     icon: LifeBuoy,
+    // 防災バッグ（/disaster/bags）は別の行き先として下に持つため、ここでは拾わない
+    // （現在地は「前方一致の長いもの」で選ぶので、/disaster/bagsを開くとバッグ側が光る）。
     matches: ["/disaster"],
     note: "非常時に何日ぶんあるか",
+  },
+  {
+    href: "/disaster/bags",
+    label: "防災バッグ",
+    icon: Backpack,
+    matches: ["/disaster/bags"],
+    note: "バッグごとの中身と点検",
   },
   {
     href: "/history",

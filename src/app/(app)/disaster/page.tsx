@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { LifeBuoy, Settings2 } from "lucide-react";
+import { Backpack, LifeBuoy, Settings2 } from "lucide-react";
 
+import { InspectionBanner } from "@/components/disaster/bag-inspection";
 import { CategoryCard, CoverageSummary } from "@/components/disaster/coverage-summary";
 import { ActionNotice, EmptyState, PageHeader, firstValue } from "@/components/inventory/chrome";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +10,7 @@ import {
   groupExclusions,
   type DisasterLotVerdict,
 } from "@/lib/disaster/assess";
+import { getInspectionAlert } from "@/lib/disaster/bag-queries";
 import { getDisasterOverview } from "@/lib/disaster/queries";
 import {
   DISASTER_RULE_VERSION,
@@ -41,7 +43,13 @@ export default async function DisasterPage({ searchParams }: PageProps<"/disaste
     );
   }
 
-  const { assessment, settings } = await getDisasterOverview(ctx);
+  const [{ assessment, settings }, bagAlert] = await Promise.all([
+    getDisasterOverview(ctx),
+    getInspectionAlert(ctx),
+  ]);
+  // 点検が要るバッグは1件ずつ帯にする。**帯を出すのは点検が要るときだけ**で、
+  // 全部済んでいる家庭の画面に「点検済み」の行が並び続けないようにする。
+  const overdueBag = bagAlert.needsInspection[0] ?? null;
   const included = assessment.categories.flatMap((category) => category.includedLots);
   const exclusionGroups = groupExclusions(assessment.excludedLots);
   const hasTarget = included.length > 0 || assessment.excludedLots.length > 0;
@@ -94,6 +102,35 @@ export default async function DisasterPage({ searchParams }: PageProps<"/disaste
           <CategoryCard key={category.rule.key} category={category} />
         ))}
       </ul>
+
+      {bagAlert.total > 0 ? (
+        overdueBag ? (
+          <InspectionBanner state={overdueBag.inspection} plan={overdueBag.plan}>
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/disaster/bags/${overdueBag.storageLocationId}`}>
+                <Backpack className="size-4" aria-hidden />
+                {overdueBag.name}を点検
+                {bagAlert.needsInspection.length > 1
+                  ? `（ほか${bagAlert.needsInspection.length - 1}件）`
+                  : ""}
+              </Link>
+            </Button>
+          </InspectionBanner>
+        ) : (
+          <p className="text-muted-foreground mx-4 mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3.5 py-2.5 text-xs md:mx-6">
+            <Backpack className="size-4 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">
+              防災バッグ{bagAlert.total}件は、どれも点検の期限内です。
+            </span>
+            <Link
+              href="/disaster/bags"
+              className="text-foreground font-semibold underline-offset-2 hover:underline"
+            >
+              バッグを見る
+            </Link>
+          </p>
+        )
+      ) : null}
 
       {!hasTarget ? (
         <p className="text-muted-foreground mx-4 rounded-lg border border-dashed px-3 py-6 text-center text-xs leading-relaxed md:mx-6">

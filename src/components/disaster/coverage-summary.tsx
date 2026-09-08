@@ -119,7 +119,37 @@ function shortestCategories(assessment: DisasterAssessment): string[] {
     .map((category) => category.rule.label);
 }
 
-/** 区分1つぶんのカード。算入量・必要量・不足量・備蓄日数を1か所に置く。 */
+/**
+ * 充足の帯（#8）。
+ *
+ * **色だけで不足を表さない。** 足りている部分は塗り、足りない部分は斜線にしてあるので、
+ * 赤と緑を見分けられなくても、模様の違いでどこまで届いているかが読める。
+ * `aria-hidden`にしてあるのは、同じ内容を隣の「56%・不足8Lたりない」が文字で持っているため。
+ */
+export function CoverageBar({ percent, isMet }: { percent: number; isMet: boolean }) {
+  return (
+    <div className="bg-muted flex h-2 overflow-hidden rounded-full" aria-hidden>
+      <span
+        className={cn("block h-full", isMet ? "bg-emerald-600" : "bg-red-500/80")}
+        style={{ width: `${percent}%` }}
+      />
+      <span
+        className="text-muted-foreground/60 block h-full flex-1"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(135deg, currentColor 0 2px, transparent 2px 5px)",
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * 区分1つぶんのカード。算入量・必要量・充足率・不足量・備蓄日数を1か所に置く。
+ *
+ * **充足率（%）と「不足／充足」の語を必ず出す**（#8の受入条件「色だけに依存せず不足を
+ * 表現する」）。枠線とバーの色は補助で、色を落としても同じことが読めるようにしてある。
+ */
 export function CategoryCard({ category }: { category: DisasterCategoryResult }) {
   const { rule } = category;
   const ratio = ratioPercent(category);
@@ -162,17 +192,10 @@ export function CategoryCard({ category }: { category: DisasterCategoryResult })
         </span>
       </p>
 
-      <div className="bg-muted h-1.5 overflow-hidden rounded-full" aria-hidden>
-        <span
-          className={cn(
-            "block h-full rounded-full",
-            category.isMet ? "bg-emerald-600" : "bg-red-500/80",
-          )}
-          style={{ width: `${ratio}%` }}
-        />
-      </div>
+      <CoverageBar percent={ratio} isMet={category.isMet} />
 
-      <p className="flex items-baseline gap-2 text-[11px]">
+      <p className="flex flex-wrap items-baseline gap-x-2 text-[11px]">
+        <span className="font-bold tabular-nums">{ratio}%</span>
         <span
           className={cn(
             "font-semibold tabular-nums",
@@ -180,8 +203,8 @@ export function CategoryCard({ category }: { category: DisasterCategoryResult })
           )}
         >
           {category.isMet
-            ? "目標に届いています"
-            : `${formatDisasterAmount(category.shortageAmount, rule.unit)}たりない`}
+            ? "充足"
+            : `不足 ${formatDisasterAmount(category.shortageAmount, rule.unit)}`}
         </span>
         {category.excludedLots.length > 0 ? (
           <span className="text-muted-foreground ml-auto">
@@ -194,7 +217,7 @@ export function CategoryCard({ category }: { category: DisasterCategoryResult })
 }
 
 /** 充足の割合（0〜100）。必要量が0の区分は満たしている扱いで100にする。 */
-function ratioPercent(category: DisasterCategoryResult): number {
+export function ratioPercent(category: DisasterCategoryResult): number {
   if (!category.requiredAmount.greaterThan(0)) return 100;
   const ratio = category.includedAmount.div(category.requiredAmount).mul(100).toNumber();
   return Math.max(0, Math.min(100, Math.round(ratio)));

@@ -176,7 +176,9 @@ const PRODUCTS: FixtureProduct[] = [
     id: "fx-product-garbage-bag",
     categoryId: "fx-category-daily",
     name: "ゴミ袋 45L",
-    defaultUnit: "PIECE",
+    // 袋は「個」ではなく「袋」で数える。衛生の判定単位（回）へは換算できないため、
+    // 防災の集計では「換算できない」として外れる（#8の点検画面でその例になっている）。
+    defaultUnit: "BAG",
     emergencyRole: "SANITATION",
   },
   {
@@ -390,10 +392,14 @@ const LOTS: FixtureLot[] = [
   },
   {
     // 使いかけのロールを0.4として持つ。小数の在庫が扱えることの確認を兼ねる。
+    // 学習ルール（fx-rule-toilet-paper）で「期限なし」と確定済みの商品なので、
+    // ロット側もnoExpiryにする。ここが空だと「期限を入れ忘れた在庫（要確認）」として
+    // 数えられ、防災バッグの点検で開封済みの例が1件も出なくなる（#8）。
     id: "fx-lot-toilet-paper",
     productId: "fx-product-toilet-paper",
     storageLocationId: "fx-location-emergency-bag",
     unit: "ROLL",
+    noExpiry: true,
     openedHoursAgo: 24 * 30,
     transactions: [
       { id: "fx-tx-toilet-paper-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 60 },
@@ -439,7 +445,7 @@ const LOTS: FixtureLot[] = [
     id: "fx-lot-garbage-bag",
     productId: "fx-product-garbage-bag",
     storageLocationId: "fx-location-emergency-bag",
-    unit: "PIECE",
+    unit: "BAG",
     noExpiry: true,
     note: "3枚",
     transactions: [
