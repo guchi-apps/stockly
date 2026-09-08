@@ -1,6 +1,6 @@
 {
   "name": "stockly",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
   "scripts": {
@@ -11,6 +11,7 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test:unit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'src/**/*.test.ts'",
+    "test:db": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'db-tests/**/*.test.ts'",
     "test": "pnpm lint && pnpm typecheck && pnpm test:unit",
     "postinstall": "prisma generate",
     "env:init": "cp -n .env.local.example .env.local && echo '.env.local を編集してください（DATABASE_URL / Supabase）'",

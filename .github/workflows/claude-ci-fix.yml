@@ -35,7 +35,7 @@ jobs:
       # 本ワークフローのworkflow_dispatch入力はここで明示的に渡す。
       issue-number: ${{ inputs.issue_number }}
       # プロンプトへそのまま埋め込まれるため、文末まで含めて1行で書く。
-      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm test:unit`（単体テスト）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ4つ。単体テストとビルドは外部サービスにもDBにも接続しないため、ビルド用の環境変数がこのステップに設定済みであれば起動は不要）"
+      verify-commands: "`pnpm lint`（Lint）・`pnpm typecheck`（型チェック）・`pnpm test:unit`（単体テスト）・`pnpm build:ci`（ビルド）を実行し、問題がないことを確認する（.github/workflows/ci.ymlのlint-and-buildジョブと同じ4つ。単体テストとビルドは外部サービスにもDBにも接続しないため、ビルド用の環境変数がこのステップに設定済みであれば起動は不要）。失敗したのが同じci.ymlのdb-constraint-testsジョブ（`pnpm test:db`。実MySQLへ接続する）の場合、このワークフローにはDBが無く`pnpm test:db`で修正結果を確認できない。ログから原因が明白なときだけ直し、確認できていない旨をコメントに明記する。原因に確信が持てなければ「修正できない場合」の手順で報告する"
       # pnpm build:ciの実行に必要。.github/workflows/ci.ymlのenvと同じプレースホルダー値を使う
       # （実際の外部サービスには接続しない）。実シークレットはここに書かない
       # （secrets: inheritで別途渡る）。
