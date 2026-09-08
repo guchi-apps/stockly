@@ -200,6 +200,12 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
 - 在庫を扱うクエリは`src/lib/household/access.ts`の`scopeToHousehold()`を通す。画面ごとに
   `where: { householdId }`を手で書かない（1か所の書き忘れがそのまま越境になる）
 - ログイン後の戻り先は`resolveInternalPath()`で正規化する（open redirectの防止）
+- **自分のオリジンは`getRequestOrigin()`だけで組み、`X-Forwarded-Proto`を鵜呑みにしない**（#34）。
+  certbotは`:80`のVirtualHostを丸ごと`:443`へ複製するため、TLSを終端していても
+  `RequestHeader set X-Forwarded-Proto "http"`が残ることがある。ヘッダーどおりに組むと
+  OAuthの`redirect_to`が`http://stockly.gucchii.com/auth/callback`になり、SupabaseのRedirect URLs
+  （`https://`で登録）と一致せず、**認証後にSite URL（`https://gucchii.com`）へ飛ばされる**。
+  `getRequestOrigin()`はローカル開発のホスト名（localhost・生IP・sslip.io）以外を`https`に固定する
 - 開発用ログイン（`POST /api/dev/login`）は`NODE_ENV=production`とシークレット未設定の**二重**で
   無効化する。片方だけ緩めない
 
