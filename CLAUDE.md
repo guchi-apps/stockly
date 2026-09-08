@@ -100,6 +100,15 @@ DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため
 `pnpm db:migrate:dev` → `pnpm db:seed:dev`（開発用ユーザーと家庭）→ `pnpm db:seed`（在庫のサンプルデータ）
 の順に流す。`db:seed`は`db:seed:dev`が作る家庭（`dev-household-own`）へ在庫を入れる。
 
+**Issueごとのworktreeでは、`pnpm db:setup`（`sudo mysql`）を人に頼まず、自分で専用DBを作ってよい**（#52）。
+`stockly`ユーザーは`app_%`にALL PRIVILEGESを持つので、`.env.local`（無ければ他worktreeからコピーし
+`DATABASE_URL`のDB名を`app_stockly_issue<Issue番号>`に変える）のパスワードで
+`mysql -u stockly -p<pw> -h 127.0.0.1 -e "CREATE DATABASE app_stockly_issue<N>"`まで実行できる。
+worktreeごとにDBを分けるのは、`pnpm test:db`と`db:seed`のデータが他worktreeと混ざらないようにするため。
+**マイグレーションを足したら`prisma migrate diff --from-migrations prisma/migrations
+--to-schema-datamodel prisma/schema.prisma --shadow-database-url <DATABASE_URLに_shadowを付けた値>`で
+`No difference detected.`を確かめる**（手で書いたSQLとスキーマのずれは、CIでは検出されない）。
+
 **他家庭のデータを参照できないことを保証する複合外部キー（後述「データモデル」）は、`db-tests/`で
 実DBに接続して検証する（`pnpm test:db`。#18）。** `pnpm test:unit`とは別コマンドで、DBが無い
 環境では実行しない・できない。ローカルで動かす場合は`pnpm db:migrate:deploy` → `pnpm db:seed`の
