@@ -63,6 +63,10 @@ model Household {
   stockLots        StockLot[]
   transactions     InventoryTransaction[]
 
+  // 補充とNotion買い物リスト連携（#6）。
+  replenishmentRules ReplenishmentRule[]
+  shoppingListEntries ShoppingListEntry[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -220,6 +224,9 @@ model Category {
   children  Category[] @relation("CategoryTree")
   products  Product[]
 
+  replenishmentRules  ReplenishmentRule[]
+  shoppingListEntries ShoppingListEntry[]
+
   /// 子から[householdId, id]で参照するための一意キー。以下の各モデルにも同じ狙いで置いてある。
   @@unique([householdId, id])
   /// カテゴリ名は家庭内で一意。親ごとの一意にしないのは、MySQLのUNIQUEがNULLを重複扱いしないため、
@@ -269,6 +276,9 @@ model Product {
   barcodes     Barcode[]
   stockLots    StockLot[]
   transactions InventoryTransaction[]
+
+  replenishmentRules  ReplenishmentRule[]
+  shoppingListEntries ShoppingListEntry[]
 
   @@unique([householdId, id])
   @@unique([householdId, name, brand])
@@ -436,4 +446,103 @@ model InventoryTransaction {
   @@index([householdId, productId, occurredAt])
   @@index([householdId, occurredAt])
   @@index([householdId, memberId])
+}
+
+// ===========================================================================
+// 補充とNotion買い物リスト連携（#6）
+// ===========================================================================
+
+/// 補充候補をNotionへ送った記録の状態。
+enum ShoppingListEntryStatus {
+  PENDING // 候補として確定したが、まだNotionへ送っていない
+  SENDING // Notionへ送信中（同じ候補の二重送信をここで止める）
+  SENT // Notionの項目を作った・更新した
+  FAILED // 送信に失敗した。理由をlastErrorに残し、そのまま送り直せる
+}
+
+/// 「これ以下になったら、ここまで買い足す」という補充の基準。
+///
+/// 対象は**商品またはカテゴリのどちらか一方**。カテゴリの基準は、そのカテゴリに属する
+/// 商品の在庫を判定単位へ換算して合計し、まとめて1件の候補にする。
+model ReplenishmentRule {
+  id          String  @id @default(cuid())
+  householdId String
+  /// 商品ごとの基準。categoryIdとはどちらか一方だけを持つ（service.tsが担保する）。
+  productId   String?
+  /// カテゴリごとの基準。
+  categoryId  String?
+
+  /// この数量以下になったら補充候補にする。0（「なくなったら買う」）も許す。
+  thresholdAmount Decimal  @db.Decimal(14, 3)
+  /// 補充後にありたい数量。不足量は「targetAmount − 現在数量」で出す。
+  targetAmount    Decimal  @db.Decimal(14, 3)
+  /// 判定に使う単位。**この単位へ換算できない在庫は数えない**（個とパックのように
+  /// 商品ごとの入数が分からないと換算できない組み合わせがあるため。src/lib/inventory/units.ts）。
+  unit            UnitCode
+  /// 一時的に候補から外すためのスイッチ。基準そのものは残る。
+  enabled         Boolean  @default(true)
+  note            String?  @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product   Product?  @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  category  Category? @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  /// 同じ対象に基準を二重に作らない。**MySQLのUNIQUEはNULLを重複扱いしない**ため、
+  /// 商品の基準（categoryIdがNULL）とカテゴリの基準（productIdがNULL）を
+  /// 1つのテーブルに置いても互いを縛らない。
+  @@unique([householdId, productId])
+  @@unique([householdId, categoryId])
+  @@index([householdId, enabled])
+}
+
+/// Notionの買い物リストへ送った（または送ろうとしている）補充候補。
+///
+/// **買い物リストの正本はNotionで、この行はStocklyからの送信記録**。Notion側での完了・編集は
+/// 読み戻さず、在庫へは一切反映しない（#6の受入条件）。項目を作り直したいときは、
+/// この行を消す（画面の「取り下げる」）と、次の送信で新しいNotion項目が作られる。
+model ShoppingListEntry {
+  id          String  @id @default(cuid())
+  householdId String
+  /// 送る対象。ReplenishmentRuleと同じく、商品またはカテゴリのどちらか一方を持つ。
+  productId   String?
+  categoryId  String?
+
+  /// 送った時点の表示名。商品名が後から変わっても、Notionへ何を送ったかを追える。
+  name           String
+  /// 送った不足量と、その単位。
+  shortageAmount Decimal  @db.Decimal(14, 3)
+  unit           UnitCode
+
+  status ShoppingListEntryStatus @default(PENDING)
+
+  /// Notion側のページid。**2回目以降はこのページを更新するので、項目が重複しない**
+  /// （受入条件のidempotency/対応ID）。Notionで手動削除された場合だけ、作り直して付け替える。
+  notionPageId String?
+  notionUrl    String? @db.Text
+
+  /// 最後に失敗した理由。画面に出して、そのまま送り直せるようにする。
+  /// **接続に失敗しても行は残す**（在庫は元から変えていないので、戻すものは無い）。
+  lastError String? @db.Text
+
+  /// 送信を始めた時刻。SENDINGのまま取り残された行を、一定時間後に送り直せるようにする。
+  sendingStartedAt DateTime?
+  lastSentAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  product   Product?  @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  category  Category? @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  /// 同じ対象の送信記録は1件だけ。ここが「同じ候補を送り直しても増えない」ことの土台で、
+  /// 2回目の送信は既存の行（＝既存のNotionページ）を更新する。
+  @@unique([householdId, productId])
+  @@unique([householdId, categoryId])
+  @@index([householdId, status])
 }

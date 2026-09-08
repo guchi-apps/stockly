@@ -44,13 +44,16 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 
 ```
 src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
-src/app/(app)/  在庫・履歴・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
+src/app/(app)/  在庫・履歴・補充・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
 src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
 src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations）と、DBを触るservice・queries
+src/lib/replenishment/ 補充ドメイン（#6）。不足量の算出（shortage）・入力の読み取り（rules）と、service・queries
+src/lib/notion/    Notion買い物リストへの送信（config・client）。読み取りAPIは使わない
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
+src/components/replenishment/ 補充基準のフォーム
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
 db-tests/       実DB（MySQL/MariaDB）に接続して複合外部キー等のDB制約を検証するテスト（#18）。
@@ -187,6 +190,31 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   訂正する手段が無くなる
 - 画面の確認用データは`pnpm db:seed:fixture`（`prisma/fixtures/daily-inventory.ts`）。
   流すたびに`fx-`で始まる在庫・履歴を作り直すので、画面で試した記録が残らない
+
+## 補充とNotion買い物リスト連携（#6）
+
+**Stocklyが在庫の正本、Notionが買い物リストの正本**という分担を崩さない。Stocklyから送るのは
+補充候補だけで、**Notion側の完了・編集・削除はStocklyへ読み戻さない**（`src/lib/notion/client.ts`が
+持つのは「ページを作る」「ページを更新する」の2つだけで、読み取りAPIは呼ばない）。
+
+- **不足の判定は`ReplenishmentRule`（商品ごと・カテゴリごとに1件）**。`thresholdAmount`以下に
+  なったら`targetAmount`までの差を不足量にする。判定単位へ**換算できない在庫と期限切れの在庫は
+  数えない**（数えると買い忘れる）。除いた件数は画面に出す。ただし商品が内容量
+  （`Product.contentAmount`／`contentUnit`）を持っていればそこを通して換算するので、
+  「1本=2L」の水は`LITER`の基準で数えられる
+- **送信の記録は`ShoppingListEntry`で、対象ごとに1件だけ**（`@@unique([householdId, productId])`と
+  `@@unique([householdId, categoryId])`。MySQLのUNIQUEはNULLを重複扱いしないので、
+  商品の行とカテゴリの行を同じ表に置ける）。2回目以降の送信は`notionPageId`のページを更新するため、
+  **同じ候補を送り直してもNotionの項目が増えない**。作り直したいときは行を消す（画面の「取り下げる」）
+- **Notionへの通信をDBのトランザクションの中で行わない。** 送信は1件ずつ、`SENDING`で印を付けてから
+  外で行い、結果（`SENT`／`FAILED`＋`lastError`）を書き戻す。失敗しても行は残り、そのまま送り直せる。
+  在庫は最初から変えていないので、戻すものは無い
+- **接続先は環境変数（`NOTION_API_TOKEN`・`NOTION_SHOPPING_DATABASE_ID`）で、実値はコミットしない。**
+  未設定でも補充の画面は開き、送信だけができない（設定漏れで在庫の画面まで止めない）。
+  プロパティ名は`NOTION_SHOPPING_*_PROPERTY`で差し替えられる（既定のタイトルは「名前」。
+  設定していない任意のプロパティは送らない——存在しないプロパティを送るとNotionが400を返すため）
+- 送信は1件ずつ`SEND_INTERVAL_MS`（400ms）空け、1回の送信は`MAX_SEND_BATCH_SIZE`（20件）まで。
+  Notionのレート制限（平均3リクエスト/秒）に触れないための歯止め
 
 ## 認証と家庭の境界
 
