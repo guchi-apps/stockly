@@ -107,10 +107,18 @@ DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため
 在庫と履歴を持つ家庭はMariaDBのエラー1217で消せない（Cascadeの伝播順は保証されない）。ヘルパーは
 取消行 → 履歴 → ロット → 家庭の順に消す。以前は失敗を握り潰していたため、実行のたびに検証用の家庭が
 残り続けていた（#13）。
-**外部キー違反の判定は`helpers.ts`の`isForeignKeyViolation()`を使い、Prismaの`P2003`だけで
-判定しない。** MySQLは外部キー違反に1452と1216の2つのコードを持ち、どちらを返すかはサーバーの
-ビルドで変わる（CIのmysql:8.0は1452、ローカル・本番のMariaDBは1216）。Prismaが`P2003`へ移すのは1452だけなので、
-コードで判定すると制約は効いているのにローカル・本番だけでテストが落ちる。
+**db-testsで「書き込みが拒否されること」を確かめるときは、Prismaのエラーコードだけで判定しない。**
+MySQLは外部キー違反に1452と1216の2つのコードを持ち、どちらを返すかはサーバーのビルドで変わる
+（CIのmysql:8.0は1452でPrismaが`P2003`へ移すが、ローカル・本番のMariaDBは1216で
+`PrismaClientUnknownRequestError`のまま届く）。コードだけで判定すると、制約は効いているのに
+ローカル・本番だけでテストが落ち、「境界が壊れている」と誤読される。
+**「拒否されたこと」だけを確かめたいときは`helpers.ts`の`assertRejectedByDatabase()`を使う**（#44）。
+エラーの種類は問わず、「DBまで往復したエラーであること」と「行が実際に増えていないこと」で
+確かめる（`household-boundary.test.ts`）。**外部キー違反であることまで区別したいときは同じく
+`helpers.ts`の`isForeignKeyViolation()`を使う**（#9、`barcode-learning.test.ts`）。1452と1216の
+どちらでも真になるよう、コードに加えてメッセージの`foreign key constraint fails`も見る。
+一意制約（1062 → `P2002`）はどちらのDBでも同じにマップされるため、そちらは`isUniqueViolation()`で
+コードのまま判定してよい。
 `.github/workflows/ci.yml`には`lint-and-build`とは別に`db-constraint-tests`ジョブがあり、
 MySQLのサービスコンテナに対して`prisma migrate deploy` → `prisma db seed` → `pnpm test:db`を
 実行する。**このジョブはbranch protectionの必須チェックには含めていない**（必須チェックは

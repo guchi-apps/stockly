@@ -3,10 +3,10 @@
  * 実際に効いていることを確認する（#18）。単一列の外部キーへ書き換えるような変更は
  * 純関数の単体テストでは検出できないため、実際のMySQL/MariaDBへINSERTして確かめる。
  */
-import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
 import {
+  assertRejectedByDatabase,
   createHousehold,
   createProduct,
   createStorageLocation,
@@ -32,12 +32,12 @@ test("他家庭の商品を参照するStockLotはINSERTできない", async () 
 
   const product = await createProduct(owner.id, "商品");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.stockLot.create({
         data: { householdId: intruder.id, productId: product.id, unit: "PIECE" },
       }),
-    isForeignKeyViolation,
+    () => prisma.stockLot.count({ where: { householdId: intruder.id } }),
   );
 });
 
@@ -49,7 +49,7 @@ test("他家庭の保管場所を参照するStockLotはINSERTできない", asy
   const product = await createProduct(intruder.id, "商品");
   const storageLocation = await createStorageLocation(owner.id, "保管場所");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.stockLot.create({
         data: {
@@ -59,7 +59,7 @@ test("他家庭の保管場所を参照するStockLotはINSERTできない", asy
           unit: "PIECE",
         },
       }),
-    isForeignKeyViolation,
+    () => prisma.stockLot.count({ where: { householdId: intruder.id } }),
   );
 });
 
@@ -73,7 +73,7 @@ test("指定した保管場所の配下にないStoragePositionを参照するSt
   // 同じ家庭内だが、locationBの配下にある詳細位置。
   const positionUnderB = await createStoragePosition(household.id, locationB.id, "位置B-1");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.stockLot.create({
         data: {
@@ -85,7 +85,7 @@ test("指定した保管場所の配下にないStoragePositionを参照するSt
           unit: "PIECE",
         },
       }),
-    isForeignKeyViolation,
+    () => prisma.stockLot.count({ where: { householdId: household.id } }),
   );
 });
 
@@ -106,7 +106,7 @@ test("他家庭のロットを参照するInventoryTransactionはINSERTできな
   });
   const intruderProduct = await createProduct(intruder.id, "商品");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.inventoryTransaction.create({
         data: {
@@ -119,7 +119,7 @@ test("他家庭のロットを参照するInventoryTransactionはINSERTできな
           occurredAt: new Date(),
         },
       }),
-    isForeignKeyViolation,
+    () => prisma.inventoryTransaction.count({ where: { householdId: intruder.id } }),
   );
 });
 
@@ -141,7 +141,7 @@ test("他家庭のメンバーを記録者にしたInventoryTransactionはINSERT
   });
 
   try {
-    await assert.rejects(
+    await assertRejectedByDatabase(
       () =>
         prisma.inventoryTransaction.create({
           data: {
@@ -155,7 +155,7 @@ test("他家庭のメンバーを記録者にしたInventoryTransactionはINSERT
             occurredAt: new Date(),
           },
         }),
-      isForeignKeyViolation,
+      () => prisma.inventoryTransaction.count({ where: { householdId: owner.id } }),
     );
   } finally {
     // Userは家庭のCascadeでは消えないので、ここで消す（所属は家庭ごと消える）。
