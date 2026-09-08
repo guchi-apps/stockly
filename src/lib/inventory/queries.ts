@@ -350,13 +350,11 @@ export async function lookupBarcode(
           category: { select: { name: true } },
           rule: {
             select: {
-              unit: true,
               storageLocationId: true,
               storagePositionId: true,
               expiryKind: true,
               shelfLifeDays: true,
               confirmedCount: true,
-              category: { select: { name: true } },
             },
           },
         },
@@ -383,8 +381,6 @@ export async function lookupBarcode(
     candidate: buildStockLotCandidate({
       rule: rule
         ? {
-            categoryName: rule.category?.name ?? null,
-            unit: rule.unit,
             storageLocationId: rule.storageLocationId,
             storagePositionId: rule.storagePositionId,
             expiryKind: rule.expiryKind,

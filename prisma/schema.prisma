@@ -268,7 +268,6 @@ model Category {
   parent       Category?     @relation("CategoryTree", fields: [householdId, parentId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   children     Category[]    @relation("CategoryTree")
   products     Product[]
-  productRules ProductRule[]
 
   replenishmentRules  ReplenishmentRule[]
   shoppingListEntries ShoppingListEntry[]
@@ -282,6 +281,10 @@ model Category {
 }
 
 /// 商品マスタ。在庫そのものではなく「何であるか」を持つ。
+///
+/// **カテゴリと既定の単位（`categoryId`・`defaultUnit`）の正本はここ**（#52）。在庫を登録・編集して
+/// 確定するたびに、そのとき選ばれた値をここへ書き戻す（`service.ts`）。`ProductRule`側には
+/// 持たせない——同じ意味の列を2か所に置くと、必ず片方だけが古くなる。
 model Product {
   id          String  @id @default(cuid())
   householdId String
@@ -404,13 +407,16 @@ model Barcode {
 ///
 /// **商品1つにつき1行**（`@@unique([householdId, productId])`）。履歴として複数世代を残さないのは、
 /// 使うのが常に最新の1件だからで、いつ何を確定したかは`InventoryTransaction`と`StockLot`に残る。
+///
+/// **カテゴリと単位はここに持たない**（#52）。どちらも`Product.categoryId`・`Product.defaultUnit`が
+/// 正本で、在庫一覧や集計はそちらを見る。両方に置くと、確定のたびに片方だけが新しくなり、
+/// 画面によって違うカテゴリが出たり、編集画面の初期値（Product側）で保存した瞬間に
+/// 学習した値が巻き戻ったりする。確定した値は`Product`へ書き戻す（`service.ts`）。
 model ProductRule {
   id          String @id @default(cuid())
   householdId String
   productId   String
 
-  categoryId        String?
-  unit              UnitCode?
   storageLocationId String?
   storagePositionId String?
 
@@ -428,14 +434,12 @@ model ProductRule {
 
   household       Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
   product         Product          @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
-  category        Category?        @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   storageLocation StorageLocation? @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   /// 詳細位置は「同じ家庭の、指定した保管場所の配下」に限る（StockLotと同じ形）。
   storagePosition StoragePosition? @relation(fields: [householdId, storageLocationId, storagePositionId], references: [householdId, storageLocationId, id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([householdId, id])
   @@unique([householdId, productId])
-  @@index([householdId, categoryId])
   @@index([householdId, storageLocationId])
   @@index([householdId, storagePositionId])
 }

@@ -103,6 +103,15 @@ DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため
 `pnpm db:migrate:dev` → `pnpm db:seed:dev`（開発用ユーザーと家庭）→ `pnpm db:seed`（在庫のサンプルデータ）
 の順に流す。`db:seed`は`db:seed:dev`が作る家庭（`dev-household-own`）へ在庫を入れる。
 
+**Issueごとのworktreeでは、`pnpm db:setup`（`sudo mysql`）を人に頼まず、自分で専用DBを作ってよい**（#52）。
+`stockly`ユーザーは`app_%`にALL PRIVILEGESを持つので、`.env.local`（無ければ他worktreeからコピーし
+`DATABASE_URL`のDB名を`app_stockly_issue<Issue番号>`に変える）のパスワードで
+`mysql -u stockly -p<pw> -h 127.0.0.1 -e "CREATE DATABASE app_stockly_issue<N>"`まで実行できる。
+worktreeごとにDBを分けるのは、`pnpm test:db`と`db:seed`のデータが他worktreeと混ざらないようにするため。
+**マイグレーションを足したら`prisma migrate diff --from-migrations prisma/migrations
+--to-schema-datamodel prisma/schema.prisma --shadow-database-url <DATABASE_URLに_shadowを付けた値>`で
+`No difference detected.`を確かめる**（手で書いたSQLとスキーマのずれは、CIでは検出されない）。
+
 **他家庭のデータを参照できないことを保証する複合外部キー（後述「データモデル」）は、`db-tests/`で
 実DBに接続して検証する（`pnpm test:db`。#18）。** `pnpm test:unit`とは別コマンドで、DBが無い
 環境では実行しない・できない。ローカルで動かす場合は`pnpm db:migrate:deploy` → `pnpm db:seed`の
@@ -254,6 +263,13 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   「新しいほうを採る」といった別の規則を混ぜない
 - **確定済みルール（`ProductRule`）は商品1つにつき1行。** 在庫を登録・編集して確定するたびに上書きする。
   **期限は日付ではなく日数（`shelfLifeDays`）で覚える**——日付を覚えると、次に買ったときには必ず過ぎている
+- **カテゴリと単位の正本は`Product`（`categoryId`・`defaultUnit`）で、`ProductRule`には持たせない**（#52）。
+  確定した値は`service.ts`が商品マスタへ書き戻す（`resolveProductId()`は**既存の商品を使い回すときも
+  更新する**）。両方に置くと、在庫一覧・集計が見る`Product`側だけが登録時のまま古くなり、画面によって
+  違うカテゴリが出る。さらに編集画面の初期値は`Product`から埋まるため、**値を変えずに保存しただけで
+  学習した値が巻き戻る**。同じ意味の列を2か所に持たせない、が結論。
+  **登録では、カテゴリは値があるときだけ上書きする**（空欄で送っただけでマスタのカテゴリを消さない。
+  消すのは編集画面から）
 - **1つのコードは家庭内で1商品にしか紐付かない**（`@@unique([householdId, code])`）。直す手段は
   「付け替え」と「解除」だけで、2件目を作らない。付け替えずに別商品として登録されたら
   `Barcode.mismatchCount`を増やし、3回で誤紐付けの疑いとして`/barcodes`の先頭に出す
