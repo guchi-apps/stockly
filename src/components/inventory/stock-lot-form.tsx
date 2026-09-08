@@ -13,7 +13,7 @@ import {
   type CandidateSource,
   type CandidateSources,
 } from "@/lib/barcode/candidate";
-import { EXPIRY_KINDS, EXPIRY_KIND_LABELS } from "@/lib/inventory/operations";
+import { EXPIRY_KINDS, EXPIRY_KIND_LABELS, hasExpiryDate } from "@/lib/inventory/operations";
 import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
 
 /**
@@ -88,8 +88,9 @@ export function StockLotForm({
   );
   const positions = locations.find((location) => location.id === locationId)?.positions ?? [];
 
+  // 既定は「未確認」。日付を入れずに登録したものは、期限内ではなく要確認として出す。
   const [expiryKind, setExpiryKind] = useState(
-    () => state.values.expiryKind ?? initial.expiryKind ?? "NONE",
+    () => state.values.expiryKind ?? initial.expiryKind ?? "UNKNOWN",
   );
 
   return (
@@ -268,7 +269,7 @@ export function StockLotForm({
               name="expiryDate"
               type="date"
               defaultValue={value("expiryDate")}
-              disabled={expiryKind === "NONE"}
+              disabled={!hasExpiryDate(expiryKind as (typeof EXPIRY_KINDS)[number])}
               className="h-11 text-base"
             />
           </Field>

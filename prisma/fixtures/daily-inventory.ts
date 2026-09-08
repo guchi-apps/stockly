@@ -205,6 +205,8 @@ interface FixtureLot {
   storagePositionId?: string;
   unit: UnitCode;
   bestBeforeDays?: number;
+  /** 「この在庫に期限は無い」と決めたもの。期限を入れ忘れた在庫（要確認）と分けるため（#5）。 */
+  noExpiry?: boolean;
   openedHoursAgo?: number;
   note?: string;
   transactions: {
@@ -334,6 +336,7 @@ const LOTS: FixtureLot[] = [
     storageLocationId: "fx-location-entrance",
     storagePositionId: "fx-position-entrance-upper",
     unit: "PIECE",
+    noExpiry: true,
     note: "玄関収納の上段。中身は保管場所「防災バッグ」を見る",
     transactions: [
       { id: "fx-tx-emergency-bag-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 400 },
@@ -381,6 +384,7 @@ const LOTS: FixtureLot[] = [
     productId: "fx-product-duct-tape",
     storageLocationId: "fx-location-emergency-bag",
     unit: "PIECE",
+    noExpiry: true,
     transactions: [
       { id: "fx-tx-duct-tape-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 200 },
     ],
@@ -390,6 +394,7 @@ const LOTS: FixtureLot[] = [
     productId: "fx-product-garbage-bag",
     storageLocationId: "fx-location-emergency-bag",
     unit: "PIECE",
+    noExpiry: true,
     note: "3枚",
     transactions: [
       { id: "fx-tx-garbage-bag-1", type: "PURCHASE", quantityDelta: "3", hoursAgo: 24 * 200 },
@@ -400,6 +405,7 @@ const LOTS: FixtureLot[] = [
     productId: "fx-product-flashlight",
     storageLocationId: "fx-location-emergency-bag",
     unit: "PIECE",
+    noExpiry: true,
     transactions: [
       { id: "fx-tx-flashlight-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 400 },
     ],
@@ -586,6 +592,7 @@ async function main(): Promise<void> {
       bestBeforeDate:
         lot.bestBeforeDays === undefined ? null : daysFromToday(lot.bestBeforeDays),
       useByDate: null,
+      noExpiry: lot.noExpiry ?? false,
       openedAt: lot.openedHoursAgo === undefined ? null : hoursAgo(lot.openedHoursAgo),
       note: lot.note ?? null,
       status: quantity.greaterThan(new Decimal(0)) ? ("ACTIVE" as const) : ("DEPLETED" as const),

@@ -406,6 +406,7 @@ export async function createStockLot(
           unit: params.unit,
           bestBeforeDate: params.expiryKind === "BEST_BEFORE" ? params.expiryDate : null,
           useByDate: params.expiryKind === "USE_BY" ? params.expiryDate : null,
+          noExpiry: params.expiryKind === "NONE",
           openedAt: params.opened ? new Date() : null,
           note: params.note,
           status: "ACTIVE",
@@ -534,6 +535,7 @@ export async function updateStockLot(
           storagePositionId: params.storagePositionId,
           bestBeforeDate: params.expiryKind === "BEST_BEFORE" ? params.expiryDate : null,
           useByDate: params.expiryKind === "USE_BY" ? params.expiryDate : null,
+          noExpiry: params.expiryKind === "NONE",
           // すでに開封済みなら開封日時はそのまま残す（編集のたびに今日へ動かさない）。
           openedAt: params.opened ? (lot.openedAt ?? new Date()) : null,
           note: params.note,
@@ -648,6 +650,10 @@ async function resolveProductId(
  *
  * バーコードから出す候補の最優先の材料で、登録・編集を確定するたびに上書きする。
  * 期限は日付ではなく**日数**で覚える（日付を覚えると、次に買ったときには必ず過ぎている）。
+ *
+ * **期限が`UNKNOWN`（未確認）のときは期限まわりを上書きしない。** `UNKNOWN`は「まだ確かめていない」を
+ * 表す入力時点の状態であって確定した内容ではなく、`ProductRule.expiryKind`のDB上の型にも無い
+ * （#5で追加された値。カテゴリ・単位・保管場所はこの場合も確定しているので通常どおり覚える）。
  */
 async function rememberProductRule(
   tx: Prisma.TransactionClient,
@@ -663,18 +669,21 @@ async function rememberProductRule(
   },
 ): Promise<void> {
   const now = new Date();
-  const shelfLifeDays =
-    confirmed.expiryKind !== "NONE" && confirmed.expiryDate
-      ? shelfLifeDaysBetween(now, confirmed.expiryDate)
-      : null;
 
   const values = {
     categoryId: confirmed.categoryId,
     unit: confirmed.unit,
     storageLocationId: confirmed.storageLocationId,
     storagePositionId: confirmed.storagePositionId,
-    expiryKind: confirmed.expiryKind,
-    shelfLifeDays,
+    ...(confirmed.expiryKind !== "UNKNOWN"
+      ? {
+          expiryKind: confirmed.expiryKind,
+          shelfLifeDays:
+            confirmed.expiryKind !== "NONE" && confirmed.expiryDate
+              ? shelfLifeDaysBetween(now, confirmed.expiryDate)
+              : null,
+        }
+      : {}),
   };
 
   await tx.productRule.upsert({

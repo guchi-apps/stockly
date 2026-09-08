@@ -22,7 +22,8 @@
     "db:rebuild-quantities": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/rebuild-lot-quantities.ts",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "job:expiry": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-expiry-notifications.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

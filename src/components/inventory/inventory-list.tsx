@@ -20,6 +20,10 @@ import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
  * PCでは在庫詳細の画面からもこの一覧を出す（左が一覧・右が詳細）。そのとき選択中の行を
  * `selectedId`で示す。
  */
+function isFiltered(filter: InventoryFilter): boolean {
+  return Boolean(filter.q || filter.storageLocationId || (filter.expiry && filter.expiry !== "all"));
+}
+
 export async function InventoryList({
   ctx,
   filter,
@@ -40,9 +44,9 @@ export async function InventoryList({
       <div className={cn("flex flex-1 flex-col", className)}>
         <EmptyState
           icon={<Boxes className="size-8" />}
-          title={filter.q || filter.storageLocationId || filter.expiredOnly ? "条件に合う在庫がありません" : "まだ在庫がありません"}
+          title={isFiltered(filter) ? "条件に合う在庫がありません" : "まだ在庫がありません"}
           description={
-            filter.q || filter.storageLocationId || filter.expiredOnly
+            isFiltered(filter)
               ? "絞り込みを外すと、ほかの在庫が出てきます。"
               : "保管場所を作ってから、最初の在庫を登録します。冷蔵庫・食品棚・防災バッグなどが目安です。"
           }
