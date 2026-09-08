@@ -455,3 +455,32 @@ export async function listProductOptions(ctx: InventoryContext) {
 
   return products;
 }
+
+// ---------------------------------------------------------------------------
+// 商品の防災属性（#47）
+// ---------------------------------------------------------------------------
+
+export type ProductDisasterAttributes = NonNullable<
+  Awaited<ReturnType<typeof getProductDisasterAttributes>>
+>;
+
+/** 商品の防災属性の編集画面が必要とするもの。家庭境界を通し、無ければ`null`。 */
+export async function getProductDisasterAttributes(ctx: InventoryContext, productId: string) {
+  const householdId = await scope(ctx);
+
+  return db.product.findFirst({
+    where: { id: productId, householdId },
+    select: {
+      id: true,
+      name: true,
+      brand: true,
+      defaultUnit: true,
+      emergencyRole: true,
+      servingsPerUnit: true,
+      usesPerUnit: true,
+      requiresHeating: true,
+      requiresWater: true,
+      temperatureZone: true,
+    },
+  });
+}

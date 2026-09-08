@@ -11,6 +11,7 @@ import {
   parseDate,
   parseExpirySettingsForm,
   parseOperationId,
+  parseProductDisasterForm,
   parseRecordForm,
   parseStockLotForm,
   parseStorageLocationForm,
@@ -344,6 +345,65 @@ describe("parseStorageLocationForm", () => {
     assert.ok(result.ok);
     assert.equal(result.value.kind, "OTHER");
     assert.equal(result.value.temperatureZone, "AMBIENT");
+  });
+});
+
+describe("parseProductDisasterForm", () => {
+  it("役割と数量、加熱/水の要否、温度帯を読む", () => {
+    const result = parseProductDisasterForm({
+      emergencyRole: "STAPLE_FOOD",
+      servingsPerUnit: "3",
+      usesPerUnit: "",
+      requiresHeating: "on",
+      requiresWater: "",
+      temperatureZone: "AMBIENT",
+    });
+
+    assert.ok(result.ok);
+    assert.equal(result.value.emergencyRole, "STAPLE_FOOD");
+    assert.equal(result.value.servingsPerUnit?.toString(), "3");
+    assert.equal(result.value.usesPerUnit, null);
+    assert.equal(result.value.requiresHeating, true);
+    assert.equal(result.value.requiresWater, false);
+    assert.equal(result.value.temperatureZone, "AMBIENT");
+  });
+
+  it("空欄の役割・温度帯は既定値（対象外・常温）へ倒す", () => {
+    const result = parseProductDisasterForm({});
+
+    assert.ok(result.ok);
+    assert.equal(result.value.emergencyRole, "NONE");
+    assert.equal(result.value.servingsPerUnit, null);
+    assert.equal(result.value.usesPerUnit, null);
+    assert.equal(result.value.temperatureZone, "AMBIENT");
+  });
+
+  it("知らない役割はエラーにする（既定値へ黙って倒さない）", () => {
+    const result = parseProductDisasterForm({ emergencyRole: "SUPERHERO" });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.ok(result.errors.emergencyRole);
+  });
+
+  it("1単位あたりの食数・使用回数は0を拒否する（空欄にするか1以上を入れる）", () => {
+    const result = parseProductDisasterForm({ servingsPerUnit: "0" });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.errors.servingsPerUnit, /0より大きい/);
+  });
+
+  it("小数3桁を超える入力を拒否する", () => {
+    const result = parseProductDisasterForm({ usesPerUnit: "1.2345" });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.errors.usesPerUnit, /3桁まで/);
+  });
+
+  it("全角数字を受け付ける", () => {
+    const result = parseProductDisasterForm({ servingsPerUnit: "２" });
+
+    assert.ok(result.ok);
+    assert.equal(result.value.servingsPerUnit?.toString(), "2");
   });
 });
 
