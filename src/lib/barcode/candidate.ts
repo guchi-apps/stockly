@@ -5,6 +5,9 @@
  * 欄ごとにどれを採ったかを一緒に返す。画面はその出所をそのままチップとして出す
  * （どこから来た値か分からないまま埋まっていると、直してよいのか判断できない）。
  *
+ * ただし**商品名・カテゴリ・単位はマスタ（`Product`）が正本**なので、確定済みルールの段を持たない
+ * （#52）。確定のたびにマスタ側が書き換わるため、段を足さなくても最後に確定した値が出る。
+ *
  * ここにはPrismaもNext.jsも持ち込まない。DBの無いCIで優先順位そのものを試せるようにするため
  * （`candidate.test.ts`）。DBから材料を集めるのは`src/lib/inventory/queries.ts`が担う。
  */
@@ -34,10 +37,14 @@ export const CANDIDATE_FIELDS = [
 
 export type CandidateField = (typeof CANDIDATE_FIELDS)[number];
 
-/** そのユーザーがその商品で最後に確定した内容（`ProductRule`）。 */
+/**
+ * そのユーザーがその商品で最後に確定した内容（`ProductRule`）。
+ *
+ * **カテゴリと単位は持たない**（#52）。どちらも商品マスタ（`Product`）が正本で、確定のたびに
+ * そちらへ書き戻すため、ここに置くと同じ値が2か所にあることになる。したがってこの2欄は
+ * 下の`BarcodeMaster`から採る——それが「前回確定した値」そのものになる。
+ */
 export interface ConfirmedRule {
-  readonly categoryName?: string | null;
-  readonly unit?: UnitCode | null;
   readonly storageLocationId?: string | null;
   readonly storagePositionId?: string | null;
   readonly expiryKind?: ExpiryKind | null;
@@ -46,7 +53,12 @@ export interface ConfirmedRule {
   readonly confirmedCount?: number;
 }
 
-/** バーコードに紐付いた商品マスタ（`Barcode` → `Product`）。 */
+/**
+ * バーコードに紐付いた商品マスタ（`Barcode` → `Product`）。
+ *
+ * カテゴリと既定の単位の正本でもある（#52）。確定するたびに`Product`側が更新されるので、
+ * ここから採る値は「その家庭で最後に確定した値」と一致する。
+ */
 export interface BarcodeMaster {
   readonly productName: string;
   readonly categoryName?: string | null;
@@ -142,17 +154,16 @@ export function buildStockLotCandidate(input: CandidateInput): StockLotCandidate
   };
 
   // 商品名は確定済みルールが持たない（名前を変えたら商品そのものを直す運用のため）。
+  // カテゴリ・単位も同じで、正本の`Product`＝マスタから採る（#52）。
   assign("productName", [
     ["BARCODE", master?.productName],
     ["AI", ai?.productName],
   ]);
   assign("categoryName", [
-    ["RULE", rule?.categoryName],
     ["BARCODE", master?.categoryName],
     ["AI", ai?.categoryName],
   ]);
   assign("unit", [
-    ["RULE", rule?.unit],
     ["BARCODE", master?.defaultUnit],
     ["AI", ai?.unit],
   ]);
