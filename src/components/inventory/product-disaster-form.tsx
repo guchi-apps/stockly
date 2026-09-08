@@ -8,12 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { categoryOfRole } from "@/lib/disaster/rules";
-import {
-  EMERGENCY_ROLES,
-  EMERGENCY_ROLE_LABELS,
-  TEMPERATURE_ZONES,
-  type EmergencyRole,
-} from "@/lib/inventory/operations";
+import { EMERGENCY_ROLES, EMERGENCY_ROLE_LABELS, TEMPERATURE_ZONES } from "@/lib/inventory/operations";
+import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
 
 /**
  * 商品の防災属性を編集するフォーム（#47）。
@@ -29,14 +25,14 @@ const TEMPERATURE_ZONE_LABELS: Readonly<Record<(typeof TEMPERATURE_ZONES)[number
 };
 
 /** 防災の集計（`DISASTER_CATEGORY_RULES`）が実際に数える役割か。それ以外は記録用。 */
-const COUNTED_ROLES = new Set(
-  EMERGENCY_ROLES.filter((role) => categoryOfRole(role as EmergencyRole) !== null),
-);
+const COUNTED_ROLES = new Set(EMERGENCY_ROLES.filter((role) => categoryOfRole(role) !== null));
 
 export interface ProductDisasterFormInitial {
   emergencyRole: string;
   servingsPerUnit: string;
   usesPerUnit: string;
+  contentAmount: string;
+  contentUnit: string;
   requiresHeating: boolean;
   requiresWater: boolean;
   temperatureZone: string;
@@ -140,6 +136,43 @@ export function ProductDisasterForm({
         </div>
         <p className="text-muted-foreground -mt-2 text-xs">
           空欄のままだと、その区分（食料・衛生・熱源など）の在庫としては数えられません。
+        </p>
+
+        <div className="grid grid-cols-[1fr_8rem] gap-3">
+          <Field
+            label={`1${unitLabel}あたりの内容量`}
+            htmlFor="contentAmount"
+            error={state.errors.contentAmount}
+          >
+            <Input
+              id="contentAmount"
+              name="contentAmount"
+              inputMode="decimal"
+              placeholder="未設定"
+              defaultValue={value("contentAmount")}
+              className="h-11 text-right text-base tabular-nums"
+            />
+          </Field>
+
+          <Field label="単位" htmlFor="contentUnit" error={state.errors.contentUnit}>
+            <NativeSelect
+              id="contentUnit"
+              name="contentUnit"
+              defaultValue={value("contentUnit")}
+            >
+              <option value="">未設定</option>
+              {Object.entries(UNIT_DEFINITIONS).map(([code, definition]) => (
+                <option key={code} value={code}>
+                  {definition.label}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+        </div>
+        <p className="text-muted-foreground -mt-2 text-xs">
+          飲料（飲料水・生活用水）のように、本・パックなど個数の単位で登録した在庫を防災の集計へ
+          含めたいときに使います（例: 1本 = 2 リットル）。ミリリットル・リットルで登録した在庫は
+          設定しなくても数えられます。
         </p>
 
         <div className="flex flex-col gap-2 rounded-xl border px-4 py-4">

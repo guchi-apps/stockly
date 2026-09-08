@@ -478,6 +478,8 @@ export async function getProductDisasterAttributes(ctx: InventoryContext, produc
       emergencyRole: true,
       servingsPerUnit: true,
       usesPerUnit: true,
+      contentAmount: true,
+      contentUnit: true,
       requiresHeating: true,
       requiresWater: true,
       temperatureZone: true,

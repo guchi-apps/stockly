@@ -40,6 +40,8 @@ export default async function ProductDisasterPage({
           emergencyRole: product.emergencyRole,
           servingsPerUnit: product.servingsPerUnit ? product.servingsPerUnit.toDecimalPlaces(3).toString() : "",
           usesPerUnit: product.usesPerUnit ? product.usesPerUnit.toDecimalPlaces(3).toString() : "",
+          contentAmount: product.contentAmount ? product.contentAmount.toDecimalPlaces(3).toString() : "",
+          contentUnit: product.contentUnit ?? "",
           requiresHeating: product.requiresHeating,
           requiresWater: product.requiresWater,
           temperatureZone: product.temperatureZone,

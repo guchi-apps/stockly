@@ -405,6 +405,31 @@ describe("parseProductDisasterForm", () => {
     assert.ok(result.ok);
     assert.equal(result.value.servingsPerUnit?.toString(), "2");
   });
+
+  it("内容量と単位を両方入れると通る（本単位の飲料をLITERへ換算するために使う）", () => {
+    const result = parseProductDisasterForm({ contentAmount: "2", contentUnit: "LITER" });
+
+    assert.ok(result.ok);
+    assert.equal(result.value.contentAmount?.toString(), "2");
+    assert.equal(result.value.contentUnit, "LITER");
+  });
+
+  it("内容量だけ・単位だけの片方だけはエラーにする（設定したのに効かない値を作らせない）", () => {
+    const amountOnly = parseProductDisasterForm({ contentAmount: "2" });
+    assert.equal(amountOnly.ok, false);
+    if (!amountOnly.ok) assert.match(amountOnly.errors.contentAmount, /どちらも/);
+
+    const unitOnly = parseProductDisasterForm({ contentUnit: "LITER" });
+    assert.equal(unitOnly.ok, false);
+    if (!unitOnly.ok) assert.match(unitOnly.errors.contentAmount, /どちらも/);
+  });
+
+  it("知らない単位はエラーにする", () => {
+    const result = parseProductDisasterForm({ contentAmount: "2", contentUnit: "PARSEC" });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.ok(result.errors.contentUnit);
+  });
 });
 
 describe("canReverse", () => {

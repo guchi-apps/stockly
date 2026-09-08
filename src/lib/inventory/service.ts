@@ -675,6 +675,8 @@ export async function updateProductDisasterAttributes(
       emergencyRole: params.emergencyRole,
       servingsPerUnit: params.servingsPerUnit,
       usesPerUnit: params.usesPerUnit,
+      contentAmount: params.contentAmount,
+      contentUnit: params.contentUnit,
       requiresHeating: params.requiresHeating,
       requiresWater: params.requiresWater,
       temperatureZone: params.temperatureZone,
