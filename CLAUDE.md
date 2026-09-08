@@ -100,6 +100,17 @@ MySQLのサービスコンテナに対して`prisma migrate deploy` → `prisma 
 実DBを持たないため、このジョブの失敗を`pnpm test:db`で確認しながら直すことはできない**
 （`verify-commands`にその旨を明記してある）。
 
+**GUIが無い環境でServer Actionまで確かめるには、`multipart/form-data`でPOSTする**（#6）。
+JSを読まない`curl`でも、Next.jsがフォームへ埋める`$ACTION_ID_…`を拾って送ればアクションが動く。
+ただし`Content-Type: application/x-www-form-urlencoded`だと**アクションは実行されずページのHTMLが
+200で返るだけ**なので、成功したように見えて何も起きない。`curl -F "$ACTION_ID_…=" -F "<欄>=<値>"`とし、
+`Location`ヘッダーの`?notice=`／`?error=`で結果を見る（サーバーコンポーネントのフォームだけ。
+`useActionState`を使うクライアント側のフォームはHTMLにIDが出ないので、この手では叩けない）。
+
+**外部APIの入口（base URL）は設定値にしておく**（#6の`NOTION_API_BASE_URL`）。ローカルに数十行の
+スタブを立てて向ければ、送信・再送・失敗・復旧までを実際に流して確かめられる。本番の値を
+入れずに済むうえ、「失敗しても在庫が変わらない」のような**壊れ方の確認**が普通のテストでできる。
+
 画面確認は`pnpm dev`で行う。ポートは環境変数`PORT` → `.env.local`の`PORT` → 3000 の順で決まる。
 Issueごとのworktreeではセッションが環境変数`PORT`（`28000 + Issue番号`）を渡すため、
 `.env.local`に書かなくてよい。`.env.local`自体が無い場合は`pnpm env:init`で雛形から作る。
