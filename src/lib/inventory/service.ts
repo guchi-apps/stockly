@@ -433,8 +433,6 @@ export async function createStockLot(
         await applyBarcodeLink(tx, householdId, productId, params.productName, params.barcode);
       }
       await rememberProductRule(tx, householdId, productId, {
-        categoryId,
-        unit: params.unit,
         storageLocationId: params.storageLocationId,
         storagePositionId: params.storagePositionId,
         expiryKind: params.expiryKind,
@@ -544,9 +542,10 @@ export async function updateStockLot(
 
       // 編集で直した値も「前回の確定」として覚え直す。登録のときだけ覚えると、
       // 「登録してすぐ直した」場合に古いほうが候補として残り続ける。
+      // カテゴリは上の`product.update()`が正本（Product）へ直しており、ここでは覚え直さない。
+      // 単位は編集画面では変えられない（ロットの単位のまま）ので、覚え直す対象にしない——
+      // 古いロットを開いて保存しただけで、学習した既定の単位が巻き戻ってしまう。
       await rememberProductRule(tx, householdId, lot.productId, {
-        categoryId,
-        unit: lot.unit,
         storageLocationId: params.storageLocationId,
         storagePositionId: params.storagePositionId,
         expiryKind: params.expiryKind,
@@ -610,7 +609,17 @@ async function resolveCategoryId(
   }
 }
 
-/** 商品を名前（＋ブランド）で解決する。未登録なら作る。 */
+/**
+ * 商品を名前（＋ブランド）で解決する。未登録なら作る。
+ *
+ * **既存の商品が見つかった場合も、確定した内容で商品マスタを更新する**（#52）。
+ * カテゴリと既定の単位の正本は`Product`（`ProductRule`は持たない）なので、ここで書き戻さないと
+ * 在庫一覧や集計が見る値だけが登録時のまま古くなり、画面によって違うカテゴリが出る。
+ *
+ * **カテゴリは値があるときだけ上書きする。** 登録は在庫を増やす操作で、欄を空のまま送ったことを
+ * 「商品マスタのカテゴリを消してよい」とは読まない（消すのは編集画面から明示的に行う）。
+ * 単位は必ず選ばれて届くため、そのまま既定として覚え直す。
+ */
 async function resolveProductId(
   householdId: string,
   name: string,
@@ -620,9 +629,18 @@ async function resolveProductId(
 ): Promise<string> {
   const existing = await db.product.findFirst({
     where: { householdId, name, brand },
-    select: { id: true },
+    select: { id: true, categoryId: true, defaultUnit: true },
   });
-  if (existing) return existing.id;
+  if (existing) {
+    const changes = {
+      ...(categoryId && categoryId !== existing.categoryId ? { categoryId } : {}),
+      ...(defaultUnit !== existing.defaultUnit ? { defaultUnit } : {}),
+    };
+    if (Object.keys(changes).length > 0) {
+      await db.product.update({ where: { id: existing.id }, data: changes });
+    }
+    return existing.id;
+  }
 
   try {
     const created = await db.product.create({
@@ -651,17 +669,19 @@ async function resolveProductId(
  * バーコードから出す候補の最優先の材料で、登録・編集を確定するたびに上書きする。
  * 期限は日付ではなく**日数**で覚える（日付を覚えると、次に買ったときには必ず過ぎている）。
  *
+ * **カテゴリと単位はここでは覚えない**（#52）。正本は`Product.categoryId`・`Product.defaultUnit`で、
+ * 確定した値は商品マスタのほうへ書き戻す（`resolveProductId()`・`updateStockLot()`）。
+ * 両方に持たせると、片方だけが新しくなって画面ごとに違う値が出る。
+ *
  * **期限が`UNKNOWN`（未確認）のときは期限まわりを上書きしない。** `UNKNOWN`は「まだ確かめていない」を
  * 表す入力時点の状態であって確定した内容ではなく、`ProductRule.expiryKind`のDB上の型にも無い
- * （#5で追加された値。カテゴリ・単位・保管場所はこの場合も確定しているので通常どおり覚える）。
+ * （#5で追加された値。保管場所はこの場合も確定しているので通常どおり覚える）。
  */
 async function rememberProductRule(
   tx: Prisma.TransactionClient,
   householdId: string,
   productId: string,
   confirmed: {
-    categoryId: string | null;
-    unit: UnitCode;
     storageLocationId: string | null;
     storagePositionId: string | null;
     expiryKind: ExpiryKind;
@@ -671,8 +691,6 @@ async function rememberProductRule(
   const now = new Date();
 
   const values = {
-    categoryId: confirmed.categoryId,
-    unit: confirmed.unit,
     storageLocationId: confirmed.storageLocationId,
     storagePositionId: confirmed.storagePositionId,
     ...(confirmed.expiryKind !== "UNKNOWN"
