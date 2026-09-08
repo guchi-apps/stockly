@@ -2,20 +2,23 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, CalendarClock, History, MapPin, ShoppingCart } from "lucide-react";
+import { Boxes, CalendarClock, History, MapPin, ScanLine, ShoppingCart } from "lucide-react";
 import { cn } from "cn";
 
 /**
  * 在庫まわりの行き先。PCでは左の列、スマホでは画面下のタブとして同じ内容を出す。
  *
  * 現在地の判定にパスが要るためクライアントコンポーネントにしてある。
+ * `/inventory/scan`は「在庫」の下にあるが行き先としては「読取」なので、
+ * **前方一致の長いものを優先して選ぶ**（単純な先頭一致だと、読取の画面で「在庫」が光る）。
  */
 const ITEMS = [
-  { href: "/inventory", label: "在庫", icon: Boxes },
-  { href: "/expiry", label: "期限", icon: CalendarClock },
-  { href: "/history", label: "履歴", icon: History },
-  { href: "/replenishment", label: "補充", icon: ShoppingCart },
-  { href: "/storage", label: "保管場所", icon: MapPin },
+  { href: "/inventory", label: "在庫", icon: Boxes, matches: ["/inventory"] },
+  { href: "/inventory/scan", label: "読取", icon: ScanLine, matches: ["/inventory/scan", "/barcodes"] },
+  { href: "/expiry", label: "期限", icon: CalendarClock, matches: ["/expiry"] },
+  { href: "/history", label: "履歴", icon: History, matches: ["/history"] },
+  { href: "/replenishment", label: "補充", icon: ShoppingCart, matches: ["/replenishment"] },
+  { href: "/storage", label: "保管場所", icon: MapPin, matches: ["/storage"] },
 ] as const;
 
 /**
@@ -34,10 +37,18 @@ const BOTTOM_NAV_COLUMNS: Readonly<Record<number, string>> = {
 
 function useCurrent(): string {
   const pathname = usePathname();
-  const match = ITEMS.find(
-    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
-  );
-  return match?.href ?? "";
+
+  let current = "";
+  let longest = 0;
+  for (const item of ITEMS) {
+    for (const prefix of item.matches) {
+      if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) continue;
+      if (prefix.length <= longest) continue;
+      current = item.href;
+      longest = prefix.length;
+    }
+  }
+  return current;
 }
 
 /** PC・iPad用の縦のナビ。 */
