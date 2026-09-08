@@ -13,6 +13,11 @@
  * - カップ麺2個
  * - 期限切れのサトウのごはん4パック
  *
+ * 防災の判定（#7）を画面で確かめられるよう、6区分（食料・飲料・衛生・照明・電源・熱源）が
+ * すべて埋まる分だけの在庫と、**除外の理由が1件ずつ出る在庫**も入れてある
+ * （期限切れ＝サトウのごはん、冷蔵＝牛乳、開封済み＝飲みかけの水、換算できない＝
+ * トイレットペーパー、期限が要確認＝ウェットティッシュ）。
+ *
  * 期限は**流した日からの相対**で入れる。固定日にすると、日が経つほど「期限切れ」「期限間近」
  * 「余裕あり」の3状態が揃わなくなり、確認用としての意味が薄れるため。
  * **流すたびに、このfixtureが作った在庫と履歴（idが`fx-`で始まるもの）を作り直す。**
@@ -77,6 +82,15 @@ const LOCATIONS = [
     positions: [],
   },
   {
+    // 冷蔵の在庫が防災の日数に数えられないこと（#7）を確かめるための場所。
+    id: "fx-location-fridge",
+    name: "冷蔵庫",
+    kind: "REFRIGERATOR" as const,
+    temperatureZone: "CHILLED" as const,
+    sortOrder: 24,
+    positions: [],
+  },
+  {
     id: "fx-location-pantry",
     name: "食品棚",
     kind: "PANTRY" as const,
@@ -98,6 +112,8 @@ interface FixtureProduct {
   contentUnit?: UnitCode;
   servingsPerUnit?: string;
   usesPerUnit?: string;
+  /** 保管に必要な温度帯。既定は常温。冷蔵・冷凍は防災の日数に数えない（#7）。 */
+  temperatureZone?: "AMBIENT" | "CHILLED" | "FROZEN";
   requiresHeating?: boolean;
   requiresWater?: boolean;
   emergencyRole?:
@@ -108,6 +124,8 @@ interface FixtureProduct {
     | "UTILITY_WATER"
     | "HEAT_SOURCE"
     | "SANITATION"
+    | "LIGHTING"
+    | "POWER"
     | "MEDICAL"
     | "OTHER";
   note?: string;
@@ -165,7 +183,35 @@ const PRODUCTS: FixtureProduct[] = [
     categoryId: "fx-category-emergency",
     name: "小型ライト",
     defaultUnit: "PIECE",
-    emergencyRole: "OTHER",
+    emergencyRole: "LIGHTING",
+  },
+  {
+    id: "fx-product-power-bank",
+    categoryId: "fx-category-emergency",
+    name: "モバイルバッテリー",
+    defaultUnit: "PIECE",
+    emergencyRole: "POWER",
+  },
+  {
+    // 1本で1回ぶんの調理をまかなう想定。熱源があるとカップ麺が食料に数えられる（#7）。
+    id: "fx-product-gas-canister",
+    categoryId: "fx-category-emergency",
+    name: "カセットボンベ",
+    defaultUnit: "BOTTLE",
+    usesPerUnit: "1",
+    emergencyRole: "HEAT_SOURCE",
+  },
+  {
+    // 冷蔵品。停電で使えなくなる前提なので、防災の日数には数えない（#7）。
+    id: "fx-product-milk",
+    categoryId: "fx-category-food",
+    name: "牛乳 1L",
+    defaultUnit: "BOTTLE",
+    contentAmount: "1000",
+    contentUnit: "MILLILITER",
+    servingsPerUnit: "2",
+    temperatureZone: "CHILLED",
+    emergencyRole: "SIDE_DISH",
   },
   {
     id: "fx-product-water",
@@ -296,6 +342,39 @@ const LOTS: FixtureLot[] = [
     noExpiry: true,
     transactions: [
       { id: "fx-tx-flashlight-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 400 },
+    ],
+  },
+  {
+    id: "fx-lot-power-bank",
+    productId: "fx-product-power-bank",
+    storageLocationId: "fx-location-emergency-bag",
+    unit: "PIECE",
+    noExpiry: true,
+    transactions: [
+      { id: "fx-tx-power-bank-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 300 },
+    ],
+  },
+  {
+    id: "fx-lot-gas-canister",
+    productId: "fx-product-gas-canister",
+    storageLocationId: "fx-location-pantry",
+    storagePositionId: "fx-position-pantry-floor",
+    unit: "BOTTLE",
+    bestBeforeDays: 365 * 5,
+    note: "3本 = 3回ぶん",
+    transactions: [
+      { id: "fx-tx-gas-canister-1", type: "PURCHASE", quantityDelta: "3", hoursAgo: 24 * 90 },
+    ],
+  },
+  {
+    // 期限内でも冷蔵なので、防災の日数には数えない（#7）。
+    id: "fx-lot-milk",
+    productId: "fx-product-milk",
+    storageLocationId: "fx-location-fridge",
+    unit: "BOTTLE",
+    bestBeforeDays: 4,
+    transactions: [
+      { id: "fx-tx-milk-1", type: "PURCHASE", quantityDelta: "1", hoursAgo: 24 * 2 },
     ],
   },
   {

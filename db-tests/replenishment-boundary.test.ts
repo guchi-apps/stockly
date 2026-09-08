@@ -4,13 +4,25 @@
  * `ReplenishmentRule`・`ShoppingListEntry`は商品・カテゴリを`[householdId, 対象Id]`の
  * 複合外部キーで参照している。単一列の外部キーへ書き換えても型チェックも単体テストも通るため、
  * 「越境できない」という保証だけが静かに消える。ここで実際にINSERTして落ちることを見る。
+ *
+ * **拒否されたことをPrismaのエラーコードで判定しない**（#44）。同じ外部キー違反でも
+ * DBによって1452（`P2003`）と1216（`PrismaClientUnknownRequestError`）に分かれるため、
+ * `assertRejectedByDatabase()`で「DBまで往復したエラー」と「行が増えていないこと」を見る。
+ * 一意制約（1062 → `P2002`）はどちらのDBでも同じに揃うので、そちらはコードで判定してよい。
  */
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
 import { Prisma } from "@prisma/client";
 
-import { createHousehold, createProduct, deleteHousehold, prisma } from "./helpers.ts";
+import {
+  assertRejectedByDatabase,
+  createHousehold,
+  createProduct,
+  deleteHousehold,
+  isUniqueViolation,
+  prisma,
+} from "./helpers.ts";
 
 const createdHouseholdIds: string[] = [];
 
@@ -20,14 +32,6 @@ after(async () => {
   }
   await prisma.$disconnect();
 });
-
-function isForeignKeyViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003";
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
-}
 
 function createCategory(householdId: string, name: string) {
   return prisma.category.create({ data: { householdId, name } });
@@ -40,7 +44,7 @@ test("他家庭の商品を対象にしたReplenishmentRuleはINSERTできない
 
   const product = await createProduct(owner.id, "商品");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.replenishmentRule.create({
         data: {
@@ -51,7 +55,7 @@ test("他家庭の商品を対象にしたReplenishmentRuleはINSERTできない
           unit: "PIECE",
         },
       }),
-    isForeignKeyViolation,
+    () => prisma.replenishmentRule.count({ where: { householdId: intruder.id } }),
   );
 });
 
@@ -62,7 +66,7 @@ test("他家庭のカテゴリを対象にしたShoppingListEntryはINSERTでき
 
   const category = await createCategory(owner.id, "飲料");
 
-  await assert.rejects(
+  await assertRejectedByDatabase(
     () =>
       prisma.shoppingListEntry.create({
         data: {
@@ -73,7 +77,7 @@ test("他家庭のカテゴリを対象にしたShoppingListEntryはINSERTでき
           unit: "LITER",
         },
       }),
-    isForeignKeyViolation,
+    () => prisma.shoppingListEntry.count({ where: { householdId: intruder.id } }),
   );
 });
 

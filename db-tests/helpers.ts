@@ -83,6 +83,16 @@ export async function assertRejectedByDatabase(
   );
 }
 
+/**
+ * 一意制約違反か。
+ *
+ * 外部キー違反と違い、**一意制約（1062）はMySQLでもMariaDBでも`P2002`に揃う**ので、
+ * こちらはエラーコードで判定してよい（CLAUDE.md「検証」）。
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
 export function createHousehold(name: string) {
   return prisma.household.create({ data: { name } });
 }
