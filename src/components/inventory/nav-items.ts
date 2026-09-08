@@ -2,6 +2,7 @@ import {
   Backpack,
   Boxes,
   CalendarClock,
+  Camera,
   History,
   LifeBuoy,
   MapPin,
@@ -44,6 +45,13 @@ export const ITEMS = [
     icon: ScanLine,
     matches: ["/inventory/scan", "/barcodes"],
     note: "バーコードで商品を引く（カメラ）",
+  },
+  {
+    href: "/intake",
+    label: "写真取込",
+    icon: Camera,
+    matches: ["/intake"],
+    note: "レシート・購入品の写真から候補を作る",
   },
   {
     href: "/expiry",
@@ -93,7 +101,13 @@ export const ITEMS = [
 
 export type NavItem = (typeof ITEMS)[number];
 
-/** スマホの下タブに出す行き先。**「メニュー」を含めて5つを超えないこと。** */
+/**
+ * スマホの下タブに出す行き先。**「メニュー」を含めて5つを超えないこと。**
+ *
+ * 写真取込（#10）はここへ入れていない。入れるには在庫・読取・期限・履歴のどれかを外すことになり、
+ * どれも毎日触るもののほうが優先度が高いため。写真取込は「買ってきたとき」に開く導線で、
+ * メニューから1段深くても押し分けやすさを損なうほうが痛い。
+ */
 const BOTTOM_NAV_HREFS: readonly string[] = [
   "/inventory",
   "/inventory/scan",

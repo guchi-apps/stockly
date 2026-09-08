@@ -1084,6 +1084,11 @@ export async function deleteStorageLocation(
       where: { householdId, storageLocationId: location.id },
       data: { storageLocationId: null, storagePositionId: null },
     });
+    // 写真から作った登録候補も同じ理由で先に外す（#10）。
+    await tx.intakeCandidate.updateMany({
+      where: { householdId, storageLocationId: location.id },
+      data: { storageLocationId: null, storagePositionId: null },
+    });
     await tx.storageLocation.delete({ where: { id: location.id } });
   });
 }
@@ -1110,6 +1115,11 @@ export async function deleteStoragePosition(
   await db.$transaction(async (tx) => {
     // 保管場所の削除と同じ理由で、学習ルールの参照を先に外す（#9）。
     await tx.productRule.updateMany({
+      where: { householdId, storagePositionId: position.id },
+      data: { storagePositionId: null },
+    });
+    // 写真から作った登録候補も同じ（#10）。
+    await tx.intakeCandidate.updateMany({
       where: { householdId, storagePositionId: position.id },
       data: { storagePositionId: null },
     });
