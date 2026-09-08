@@ -429,6 +429,16 @@ export type StorageKind = (typeof STORAGE_KINDS)[number];
 export const TEMPERATURE_ZONES = ["AMBIENT", "CHILLED", "FROZEN"] as const;
 export type TemperatureZone = (typeof TEMPERATURE_ZONES)[number];
 
+/**
+ * 温度帯の表示名。**画面ごとに書き写さない**（保管場所の一覧・保管場所の追加・商品の防災属性の
+ * 3画面が同じラベルを別々に持っていたのを、ここへまとめた。#47のレビュー指摘）。
+ */
+export const TEMPERATURE_ZONE_LABELS: Readonly<Record<TemperatureZone, string>> = {
+  AMBIENT: "常温",
+  CHILLED: "冷蔵",
+  FROZEN: "冷凍",
+};
+
 export function parseStorageLocationForm(input: RawInput): ParseResult<StorageLocationFormValue> {
   return collect(() => {
     const name = text(input, "name");

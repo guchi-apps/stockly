@@ -7,6 +7,7 @@ import { EMPTY_FORM_STATE } from "@/app/(app)/form-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TEMPERATURE_ZONES, TEMPERATURE_ZONE_LABELS } from "@/lib/inventory/operations";
 
 /**
  * 保管場所の追加フォーム。
@@ -24,11 +25,7 @@ const KINDS = [
   { value: "OTHER", label: "そのほか", zone: "AMBIENT" },
 ] as const;
 
-const ZONES = [
-  { value: "AMBIENT", label: "常温" },
-  { value: "CHILLED", label: "冷蔵" },
-  { value: "FROZEN", label: "冷凍" },
-] as const;
+// 温度帯のラベルは`operations.ts`の`TEMPERATURE_ZONE_LABELS`が正（画面ごとに書き写さない）。
 
 export function StorageLocationForm() {
   const [state, formAction, pending] = useActionState(createStorageLocationAction, EMPTY_FORM_STATE);
@@ -85,9 +82,9 @@ export function StorageLocationForm() {
             defaultValue={state.values.temperatureZone ?? "AMBIENT"}
             className="border-input bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-11 rounded-lg border px-3 text-base outline-none focus-visible:ring-3"
           >
-            {ZONES.map((zone) => (
-              <option key={zone.value} value={zone.value}>
-                {zone.label}
+            {TEMPERATURE_ZONES.map((zone) => (
+              <option key={zone} value={zone}>
+                {TEMPERATURE_ZONE_LABELS[zone]}
               </option>
             ))}
           </select>

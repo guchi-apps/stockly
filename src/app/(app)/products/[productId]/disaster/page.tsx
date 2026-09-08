@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { updateProductDisasterAttributesAction } from "@/app/(app)/actions";
 import { ActionNotice, PageHeader, firstValue } from "@/components/inventory/chrome";
 import { ProductDisasterForm } from "@/components/inventory/product-disaster-form";
+import { resolveInternalPathOr } from "@/lib/auth/internal-path";
 import { requireInventoryContext } from "@/lib/inventory/context";
 import { getProductDisasterAttributes } from "@/lib/inventory/queries";
 import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
@@ -25,7 +26,9 @@ export default async function ProductDisasterPage({
   const product = await getProductDisasterAttributes(ctx, productId);
   if (!product) notFound();
 
-  const returnTo = firstValue(query.returnTo) || "/inventory";
+  // 戻り先はURLのクエリから来る外部入力なので、必ず内部パスへ正す（open redirectの防止）。
+  // この値は「キャンセル」のリンクと、送信フォームの`redirectTo`の両方に使う。
+  const returnTo = resolveInternalPathOr(firstValue(query.returnTo), "/inventory");
 
   return (
     <>

@@ -18,3 +18,20 @@ export function resolveInternalPath(param: string | null | undefined): string {
   if (param.startsWith("//") || param.startsWith("/\\")) return DEFAULT_HOME_PATH;
   return param;
 }
+
+/**
+ * 戻り先を内部パスへ正し、弾かれた値は呼び出し側の既定へ倒す。
+ *
+ * `resolveInternalPath()`が弾いた値はホーム（`/`）になるが、画面の「戻る」「キャンセル」の
+ * 行き先はホームより元の一覧（`/inventory`など）のほうが自然なので、既定を渡せる形にしてある。
+ * 利用者が明示的に`/`を指定した場合だけは`/`のまま通す。
+ *
+ * **クエリパラメータやフォームから来た戻り先を使う画面は、この判定を書き写さずここを通すこと。**
+ * 1か所でも素通しすると、そこだけがopen redirectの入口になる（#47のレビュー指摘）。
+ * リンクの`href`に使う値も対象——サーバー側の`redirect()`だけを正しても、
+ * 画面に置いたリンクからは外部へ出られる。
+ */
+export function resolveInternalPathOr(param: string | null | undefined, fallback: string): string {
+  const path = resolveInternalPath(param);
+  return path === DEFAULT_HOME_PATH && param !== DEFAULT_HOME_PATH ? fallback : path;
+}

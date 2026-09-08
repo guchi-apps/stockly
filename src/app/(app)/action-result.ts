@@ -5,7 +5,7 @@
  * （在庫・補充）が同じ処理を持たないよう、ここへ置く。**特に`backPath()`は
  * open redirectの防止そのものなので、画面ごとに書き写さない。**
  */
-import { resolveInternalPath } from "@/lib/auth/internal-path";
+import { resolveInternalPathOr } from "@/lib/auth/internal-path";
 import { InventoryInputError } from "@/lib/inventory/operations";
 import { InventoryConflictError, InventoryNotFoundError } from "@/lib/inventory/service";
 
@@ -49,7 +49,5 @@ export function withParams(path: string, params: { notice?: string; error?: stri
 
 /** 戻り先はフォームから渡ってくるため、必ず内部パスへ正す（open redirectの防止）。 */
 export function backPath(formData: FormData, fallback: string): string {
-  const value = str(formData, "redirectTo");
-  const path = resolveInternalPath(value);
-  return path === "/" && value !== "/" ? fallback : path;
+  return resolveInternalPathOr(str(formData, "redirectTo"), fallback);
 }

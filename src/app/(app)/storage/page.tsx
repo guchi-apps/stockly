@@ -14,13 +14,8 @@ import { SubmitButton } from "@/components/inventory/submit-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { requireInventoryContext } from "@/lib/inventory/context";
+import { TEMPERATURE_ZONE_LABELS } from "@/lib/inventory/operations";
 import { listStorageLocations } from "@/lib/inventory/queries";
-
-const TEMPERATURE_LABELS: Record<string, string> = {
-  AMBIENT: "常温",
-  CHILLED: "冷蔵",
-  FROZEN: "冷凍",
-};
 
 export default async function StoragePage({ searchParams }: PageProps<"/storage">) {
   const query = await searchParams;
@@ -69,7 +64,7 @@ export default async function StoragePage({ searchParams }: PageProps<"/storage"
                   </SubmitButton>
                 </form>
 
-                <Badge variant="outline">{TEMPERATURE_LABELS[location.temperatureZone]}</Badge>
+                <Badge variant="outline">{TEMPERATURE_ZONE_LABELS[location.temperatureZone]}</Badge>
                 <Badge variant="outline">在庫 {location._count.stockLots}件</Badge>
 
                 <form action={deleteStorageLocationAction}>

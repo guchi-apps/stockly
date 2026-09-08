@@ -8,7 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { categoryOfRole } from "@/lib/disaster/rules";
-import { EMERGENCY_ROLES, EMERGENCY_ROLE_LABELS, TEMPERATURE_ZONES } from "@/lib/inventory/operations";
+import {
+  EMERGENCY_ROLES,
+  EMERGENCY_ROLE_LABELS,
+  TEMPERATURE_ZONES,
+  TEMPERATURE_ZONE_LABELS,
+} from "@/lib/inventory/operations";
 import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
 
 /**
@@ -18,11 +23,6 @@ import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
  * 家庭内のその商品のすべてのロットに共通で効くため、日常の在庫登録では触らせない
  * （Issueの技術上の前提「登録フォームを防災属性で重くしない」）。
  */
-const TEMPERATURE_ZONE_LABELS: Readonly<Record<(typeof TEMPERATURE_ZONES)[number], string>> = {
-  AMBIENT: "常温",
-  CHILLED: "冷蔵",
-  FROZEN: "冷凍",
-};
 
 /** 防災の集計（`DISASTER_CATEGORY_RULES`）が実際に数える役割か。それ以外は記録用。 */
 const COUNTED_ROLES = new Set(EMERGENCY_ROLES.filter((role) => categoryOfRole(role) !== null));
