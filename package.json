@@ -19,6 +19,7 @@
     "db:seed:dev": "node scripts/seed-dev.mjs",
     "db:seed": "prisma db seed",
     "db:seed:fixture": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON prisma/fixtures/daily-inventory.ts",
+    "db:rebuild-quantities": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/rebuild-lot-quantities.ts",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio"
