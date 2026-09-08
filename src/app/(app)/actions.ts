@@ -23,6 +23,7 @@ import {
   RECORDABLE_TYPE_LABELS,
   parseExpirySettingsForm,
   parseOperationId,
+  parseProductDisasterForm,
   parseRecordForm,
   parseStockLotForm,
   parseStorageLocationForm,
@@ -40,6 +41,7 @@ import {
   renameStorageLocation,
   reverseTransaction,
   unlinkBarcode,
+  updateProductDisasterAttributes,
   updateStockLot,
   type BarcodeLinkInput,
 } from "@/lib/inventory/service";
@@ -216,6 +218,44 @@ export async function updateStockLotAction(
 
   revalidateInventory();
   redirect(withParams(`/inventory/${lotId}`, { notice: "在庫を更新しました。" }));
+}
+
+// ---------------------------------------------------------------------------
+// 商品の防災属性（#47）
+// ---------------------------------------------------------------------------
+
+/**
+ * 商品の防災属性を保存する。
+ *
+ * 数量は動かさないので`revalidateInventory()`は呼ばず、この属性が効く画面
+ * （`/disaster`・`/disaster/bags`）だけを更新する。
+ */
+export async function updateProductDisasterAttributesAction(
+  _prevState: InventoryFormState,
+  formData: FormData,
+): Promise<InventoryFormState> {
+  const ctx = await requireInventoryContextForAction();
+  const input = rawInput(formData);
+
+  const parsed = parseProductDisasterForm(input);
+  if (!parsed.ok) return { errors: parsed.errors, values: input };
+
+  const productId = str(formData, "productId");
+  try {
+    await updateProductDisasterAttributes(ctx, { ...parsed.value, productId });
+  } catch (error) {
+    if (error instanceof InventoryInputError) {
+      return { errors: { [error.field]: error.message }, values: input };
+    }
+    return { errors: { form: userFacingMessage(error) }, values: input };
+  }
+
+  revalidatePath("/disaster");
+  revalidatePath("/disaster/bags");
+  revalidatePath(`/products/${productId}/disaster`);
+
+  const back = backPath(formData, `/products/${productId}/disaster`);
+  redirect(withParams(back, { notice: "防災属性を保存しました。" }));
 }
 
 // ---------------------------------------------------------------------------

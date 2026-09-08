@@ -27,6 +27,7 @@ import {
   nextLotStatus,
   signedDelta,
   type ExpiryKind,
+  type ProductDisasterFormValue,
   type RecordableTransactionType,
   type StockLotFormValue,
   type StorageLocationFormValue,
@@ -657,6 +658,48 @@ async function resolveProductId(
     if (!raced) throw error;
     return raced.id;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 商品の防災属性（#47）
+// ---------------------------------------------------------------------------
+
+export interface UpdateProductDisasterAttributesParams extends ProductDisasterFormValue {
+  readonly productId: string;
+}
+
+/**
+ * 商品の防災属性を書き換える。
+ *
+ * `StockLot`ではなく`Product`側の列を直接更新する（この属性は1商品につき1組で、
+ * 家庭内のその商品のすべてのロットに共通で効くため）。数量を動かさないので
+ * `InventoryTransaction`は積まない。
+ */
+export async function updateProductDisasterAttributes(
+  ctx: InventoryContext,
+  params: UpdateProductDisasterAttributesParams,
+): Promise<void> {
+  const householdId = await scope(ctx);
+
+  const product = await db.product.findFirst({
+    where: { id: params.productId, householdId },
+    select: { id: true },
+  });
+  if (!product) throw new InventoryNotFoundError("この商品は見つかりませんでした。");
+
+  await db.product.update({
+    where: { id: product.id },
+    data: {
+      emergencyRole: params.emergencyRole,
+      servingsPerUnit: params.servingsPerUnit,
+      usesPerUnit: params.usesPerUnit,
+      contentAmount: params.contentAmount,
+      contentUnit: params.contentUnit,
+      requiresHeating: params.requiresHeating,
+      requiresWater: params.requiresWater,
+      temperatureZone: params.temperatureZone,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------

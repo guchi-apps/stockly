@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { DEFAULT_HOME_PATH, resolveInternalPath } from "./internal-path.ts";
+import {
+  DEFAULT_HOME_PATH,
+  resolveInternalPath,
+  resolveInternalPathOr,
+} from "./internal-path.ts";
 
 /** ログイン後の戻り先で外部サイトへ飛ばされないこと（open redirectの防止・#2）。 */
 
@@ -43,5 +47,29 @@ describe("外部へ飛ばしうる値は既定の画面へ落とす", () => {
     assert.equal(resolveInternalPath(null), DEFAULT_HOME_PATH);
     assert.equal(resolveInternalPath(undefined), DEFAULT_HOME_PATH);
     assert.equal(resolveInternalPath(""), DEFAULT_HOME_PATH);
+  });
+});
+
+/** 画面ごとの戻り先（「キャンセル」のリンク・フォームの`redirectTo`）。 */
+describe("resolveInternalPathOr", () => {
+  it("アプリ内のパスはそのまま使う", () => {
+    assert.equal(resolveInternalPathOr("/inventory/lot-1", "/inventory"), "/inventory/lot-1");
+    assert.equal(resolveInternalPathOr("/disaster?tab=food", "/inventory"), "/disaster?tab=food");
+  });
+
+  it("外部へ飛ばしうる値は、ホームではなく呼び出し側の既定へ倒す", () => {
+    for (const value of ["https://evil.example", "//evil.example", "/\\evil.example", "items"]) {
+      assert.equal(resolveInternalPathOr(value, "/inventory"), "/inventory");
+    }
+  });
+
+  it("値が無いときも既定へ倒す", () => {
+    assert.equal(resolveInternalPathOr(null, "/inventory"), "/inventory");
+    assert.equal(resolveInternalPathOr(undefined, "/inventory"), "/inventory");
+    assert.equal(resolveInternalPathOr("", "/inventory"), "/inventory");
+  });
+
+  it("明示的に指定した`/`はホームのまま通す", () => {
+    assert.equal(resolveInternalPathOr("/", "/inventory"), "/");
   });
 });
