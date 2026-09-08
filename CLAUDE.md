@@ -104,9 +104,13 @@ DBを使う確認は、初回だけ`pnpm db:setup`（`sudo mysql`を使うため
 在庫と履歴を持つ家庭はMariaDBのエラー1217で消せない（Cascadeの伝播順は保証されない）。ヘルパーは
 取消行 → 履歴 → ロット → 家庭の順に消す。以前は失敗を握り潰していたため、実行のたびに検証用の家庭が
 残り続けていた（#13）。
-**同じ外部キー違反でも、CIのMySQL 8は1452（Prismaの`P2003`）、ローカル・本番のMariaDBは1216
-（`PrismaClientUnknownRequestError`）を返すことがある。** 違反を期待するテストは両方を受ける
-（`household-boundary.test.ts`の`isForeignKeyViolation()`）。
+**db-testsで「書き込みが拒否されること」を確かめるときは、Prismaのエラーコードで判定しない。**
+同じ外部キー違反でも、MySQL 8は1452を返して`P2003`になるが、MariaDBは1216を返すことがあり、
+Prismaはそれを`PrismaClientUnknownRequestError`のまま投げる。コードで判定すると、制約は効いているのに
+MariaDBでだけ落ち、「境界が壊れている」と誤読される（#44）。`helpers.ts`の
+`assertRejectedByDatabase()`を使い、**エラーの種類は問わず**「DBまで往復したエラーであること」と
+「行が実際に増えていないこと」で確かめる。一意制約（1062 → `P2002`）はどちらのDBでも同じに
+マップされるため、そちらはコードで判定してよい。
 `.github/workflows/ci.yml`には`lint-and-build`とは別に`db-constraint-tests`ジョブがあり、
 MySQLのサービスコンテナに対して`prisma migrate deploy` → `prisma db seed` → `pnpm test:db`を
 実行する。**このジョブはbranch protectionの必須チェックには含めていない**（必須チェックは

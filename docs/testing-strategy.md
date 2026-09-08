@@ -89,9 +89,14 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
   直せないため。落ちたときは人（またはローカルセッション）が`pnpm test:db`で確かめて直す。
   **落ちたまま放置してよいという意味ではない**——Signalyへ失敗が通知される
 - `lint-and-build`のステップを増やしたら、`claude-ci-fix.yml`・`claude-pr-repair.yml`の`verify-commands`を同じ内容に直す（[CLAUDE.md](../CLAUDE.md)「検証」）
-- CIのMySQL 8とローカル・本番のMariaDB 10.11では、同じ外部キー違反でもエラーコードが違う
-  （MySQLは1452 → PrismaのP2003、MariaDBは1216 → `PrismaClientUnknownRequestError`）。
-  外部キー違反を期待するテストは両方を受ける（`db-tests/household-boundary.test.ts`の`isForeignKeyViolation()`）
+- CIのMySQL 8とMariaDBでは、同じ外部キー違反でもエラーコードが違う（MySQLは1452 → PrismaのP2003、
+  MariaDBは1216 → Prismaがマップできず`PrismaClientUnknownRequestError`）。**拒否されることを
+  エラーコードで判定しない**（#44）。`db-tests/helpers.ts`の`assertRejectedByDatabase()`を使い、
+  エラーの種類は問わず「DBまで往復したエラーであること」＋「行が増えていないこと」で確かめる。
+  一意制約（1062 → P2002）はどちらでも同じにマップされるので、そちらはコードで判定してよい
+- **サブPCのローカルDBはMySQL 8**（`mysql -u stockly -p -e 'select @@version'`で確認できる）。
+  本番（VPS）は共有MariaDBなので、**MariaDB固有の挙動は手元では再現できない**。
+  DBの実装差に依存しないテストの書き方（上）で回避する
 
 ## 6. 復元・再構築の検証
 
