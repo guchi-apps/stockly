@@ -39,7 +39,7 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 | 防災ストックの判定（#7） | unit: 区分と必要量の算出、冷蔵冷凍・期限切れ・期限不明・開封済み・換算不能を数えないこと、明示設定を立てたときだけ例外化されること、同じ入力なら同じ結果になること。db: `DisasterPlanSetting`の既定値がコード側の`DEFAULT_DISASTER_PLAN`と一致すること | 区分・必要量の意味・除外条件を変えたら`DISASTER_RULE_VERSION`を上げ、その版で判定した結果が画面から追えることを確かめる | #7 |
 | 補充・Notion連携（#6） | unit: 不足量の算出、再送でNotion側が重複しないidempotencyキーの組み立て。**Notion APIへは接続しない**（クライアントを差し替えられる形にし、送信内容の組み立てを純関数で検証する） | 接続失敗時に在庫更新をロールバックせず再送可能な状態を残すことの検証 | #6 |
 | バーコード・商品マスタ（#9） | unit: コードの正規化と重複検知、確定済みルール > バーコード > AI候補の優先順位 | db: `Barcode`の`@@unique([householdId, code])` | #9 |
-| AI候補（#10, #11） | unit: 候補の信頼度の閾値と「自動確定しない」こと、確定前後の状態遷移。**モデルAPIへは接続しない**（応答を固定した入力で検証する） | 画像を扱う場合は§3の「画像アップロード制約」を満たすテスト | #10, #11 |
+| AI候補（#10, #11） | unit: 候補の信頼度の閾値と「自動確定しない」こと、確定前後の状態遷移（`intake/candidates.test.ts`）、モデル出力の検証（`intake/extraction.test.ts`）、費用の概算と資格情報の読み取り（`intake/config.test.ts`）。**モデルAPIへは接続しない**（`ANTHROPIC_BASE_URL`をローカルのスタブへ向けて流す）。画像を扱う場合は§3の「画像アップロード制約」を満たすテスト（`intake/image.test.ts`）。db: 新しいモデルの越境INSERTと、同じ画像を2回取り込めないこと（`db-tests/intake-boundary.test.ts`） | — | #10, #11 |
 | 権限・共有（#12） | unit: OWNERだけができる操作をMEMBERが呼べないこと。db: `HouseholdMember`の`@@unique([householdId, userId])` | 招待の受け入れで他家庭へ所属しないこと | #12 |
 
 **PR本文に書くこと**: 追加・変更したテストの一覧（ファイル名）と、自動テストで確かめられなかった挙動を
@@ -58,18 +58,21 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 | 入力検証 | Server Actionは`operations.ts`の`parse*()`を通してからserviceを呼ぶ。数量は`Prisma.Decimal`・桁数はDBの`Decimal(14,3)`に合わせて拒否、日付は存在確認、操作IDは形式確認 | unit: `operations.test.ts` | 担保あり |
 | CSRF | Server ActionはNext.jsが`Origin`と`Host`の一致を検証する（不一致は拒否）。Route Handlerの`POST`は`/api/dev/login`（本番404）と`/auth/signout`（ログアウトのみ）。セッションCookieは`SameSite=Lax` | smoke: 本番起動で`/api/dev/login`が404。Route HandlerでPOSTを足すときは、状態を変えるものをServer Actionへ寄せるか、Originの検証を足してPR本文に書く | 担保あり（Route Handler追加時に再確認） |
 | rate limit | なし。ログインはSupabase Authのレート制限に依存。アプリ側のServer Action・APIには無い | なし | 別Issueで対応（起点 #13）。少なくとも認証まわりの公開パス（`/auth/*`、将来のAPI）を対象にする |
-| 画像アップロード制約 | まだ画像を受け取る機能が無い | なし（#10・#11が実装するときの基準は下記） | #10・#11で実装 |
+| 画像アップロード制約 | `src/lib/intake/image.ts`が先頭バイトで形式を判定し、EXIF等の付帯情報を落とす。枚数は`intake/actions.ts`、バイト数は`intake/service.ts`が弾く | unit: `intake/image.test.ts`（形式判定の境界・付帯情報の除去）。E2E: 画像でないファイルを`image/jpeg`と名乗って送っても拒否されること | 担保あり（#10） |
 | 開発用ログインの本番無効化 | `isDevLoginEnabled()`が`NODE_ENV=production`とシークレット未設定の二重で偽 | unit: `dev-login.test.ts`。smoke: `scripts/check-dev-login-disabled.sh`（シークレットをわざと与えて起動し、404とリダイレクトを確認） | 担保あり |
 | シークレット・個人情報の混入 | `.env.local`はgit管理外。`ALLOWED_GOOGLE_EMAILS`等の実値はGitHub Secrets/1Passwordのみ | レビューで見る。`.env.example`は空値のみ | 運用で担保 |
 
-### 画像アップロード制約の基準（#10・#11向け）
+### 画像アップロード制約の基準（#10で実装済み・#11も従う）
 
-- 受け付ける形式は`image/jpeg`・`image/png`・`image/webp`・`image/heic`に限り、**MIMEタイプはクライアントの申告ではなくサーバー側でマジックバイトを見て判定する**
-- 1枚あたりの上限は10MB、1リクエストあたりの枚数上限を決めて`parse*()`と同じ層で拒否する
-- 画像本体はDBに入れない。AI候補の抽出に使ったあとは保持しない（保持が要る場合は保存先・期限・費用をユーザー確認のうえ決める）
-- 位置情報（EXIF GPS）はモデルへ送る前に落とす
-- 候補の抽出結果（テキスト）だけを`ProductAlias`等に残し、`confidence`を付ける。**自動確定はしない**（README「プロダクト方針」）
-- unitテスト: 形式判定・サイズ上限・枚数上限の境界値。モデルAPIには接続せず、応答を固定した入力で確定前後の状態を検証する
+- 受け付ける形式は`image/jpeg`・`image/png`・`image/webp`に限り、**MIMEタイプはクライアントの申告ではなくサーバー側でマジックバイトを見て判定する**（`intake/image.ts`の`detectImageType()`）。
+  **HEICは受け付けない**——モデルのAPIが受け取れないため。iPhoneから撮った場合はブラウザ側でJPEGへ描き直してから送る（`photo-upload-form.tsx`）
+- 1枚あたりの上限は10MB、1回あたり5枚まで（`intake/config.ts`の`MAX_IMAGE_BYTES`・`MAX_IMAGES_PER_BATCH`）
+- **画像本体はMariaDBに保存する**（#10でユーザー確認のうえ決定）。長辺1600pxのJPEGへ縮めてから入れ、家庭ごとの保存期間（既定30日・「保存しない」も選べる）を過ぎたら中身を消す。
+  **`sha256`だけは消さない**——消すと同じ写真の二重登録を止められなくなる
+- 位置情報（EXIF GPS）はモデルへ送る前に落とす（`intake/image.ts`の`stripMetadata()`）。**画素は再エンコードしない**（文字が潰れて読み取りに響くため、付帯情報のかたまりだけを取り除く）
+- 候補の抽出結果（テキスト）だけを`IntakeCandidate`に残し、欄ごとに`confidence`を付ける。**自動確定はしない**（README「プロダクト方針」。`initialCandidateStatus()`は確からしさを引数に取らない）
+- 費用の上限は家庭ごとに持ち、**応答が届いた失敗でも払ったトークンを記録する**（0にすると上限が効かない）
+- unitテスト: 形式判定・付帯情報の除去・サイズ上限・枚数上限の境界値。モデルAPIには接続せず、`ANTHROPIC_BASE_URL`をローカルのスタブへ向けて確定前後の状態を検証する
 
 ## 4. 操作の追跡（監査）について
 
