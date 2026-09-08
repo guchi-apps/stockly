@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, CalendarClock, History, MapPin } from "lucide-react";
+import { Boxes, CalendarClock, History, MapPin, ShoppingCart } from "lucide-react";
 import { cn } from "cn";
 
 /**
@@ -14,8 +14,23 @@ const ITEMS = [
   { href: "/inventory", label: "在庫", icon: Boxes },
   { href: "/expiry", label: "期限", icon: CalendarClock },
   { href: "/history", label: "履歴", icon: History },
+  { href: "/replenishment", label: "補充", icon: ShoppingCart },
   { href: "/storage", label: "保管場所", icon: MapPin },
 ] as const;
+
+/**
+ * 下タブの列数。**`grid-cols-${n}`のような動的なクラス名はTailwindが拾えない**ため、
+ * 使いうる列数のクラスを並べて`ITEMS.length`で引く。
+ *
+ * 行き先を足すIssueが同時に走っている（#5・#9）。ここを`grid-cols-4`と決め打ちにすると、
+ * 項目を足す全員が同じ1行を書き換えることになり、必ず衝突する。
+ */
+const BOTTOM_NAV_COLUMNS: Readonly<Record<number, string>> = {
+  3: "grid-cols-3",
+  4: "grid-cols-4",
+  5: "grid-cols-5",
+  6: "grid-cols-6",
+};
 
 function useCurrent(): string {
   const pathname = usePathname();
@@ -61,7 +76,12 @@ export function BottomNav() {
   const current = useCurrent();
 
   return (
-    <nav className="bg-background/95 fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
+    <nav
+      className={cn(
+        "bg-background/95 fixed inset-x-0 bottom-0 z-20 grid border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden",
+        BOTTOM_NAV_COLUMNS[ITEMS.length] ?? "grid-cols-4",
+      )}
+    >
       {ITEMS.map(({ href, label, icon: Icon }) => (
         <Link
           key={href}
