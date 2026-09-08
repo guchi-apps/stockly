@@ -36,6 +36,7 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 | 家庭の境界（`src/lib/household/`, スキーマ） | unit: `scopeToHousehold()`が他家庭のidを受け付けない。db: **新しいモデルを足したら**、そのモデルへ他家庭の親を参照させるINSERTが外部キーで弾かれるテストを`db-tests/household-boundary.test.ts`へ1件足す | — | #2, #3, #18 |
 | 在庫履歴（`src/lib/inventory/`） | unit: 種別と符号、取消の組み立て、数量の状態遷移。db: 集計値と履歴の一致（seed）、二重取消の拒否、再構築 | 新しい`InventoryTransactionType`を足したら、その符号の規則を`ledger.test.ts`へ | #3, #4, #13 |
 | 期限・通知（#5） | unit: Asia/Tokyoの日付境界、期限不明を期限内とみなさない、重複通知のdedupeKey | db: 重複通知を防ぐ一意制約 | #5 |
+| 防災ストックの判定（#7） | unit: 区分と必要量の算出、冷蔵冷凍・期限切れ・期限不明・開封済み・換算不能を数えないこと、明示設定を立てたときだけ例外化されること、同じ入力なら同じ結果になること。db: `DisasterPlanSetting`の既定値がコード側の`DEFAULT_DISASTER_PLAN`と一致すること | 区分・必要量の意味・除外条件を変えたら`DISASTER_RULE_VERSION`を上げ、その版で判定した結果が画面から追えることを確かめる | #7 |
 | 補充・Notion連携（#6） | unit: 不足量の算出、再送でNotion側が重複しないidempotencyキーの組み立て。**Notion APIへは接続しない**（クライアントを差し替えられる形にし、送信内容の組み立てを純関数で検証する） | 接続失敗時に在庫更新をロールバックせず再送可能な状態を残すことの検証 | #6 |
 | バーコード・商品マスタ（#9） | unit: コードの正規化と重複検知、確定済みルール > バーコード > AI候補の優先順位 | db: `Barcode`の`@@unique([householdId, code])` | #9 |
 | AI候補（#10, #11） | unit: 候補の信頼度の閾値と「自動確定しない」こと、確定前後の状態遷移。**モデルAPIへは接続しない**（応答を固定した入力で検証する） | 画像を扱う場合は§3の「画像アップロード制約」を満たすテスト | #10, #11 |
@@ -89,11 +90,12 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
   直せないため。落ちたときは人（またはローカルセッション）が`pnpm test:db`で確かめて直す。
   **落ちたまま放置してよいという意味ではない**——Signalyへ失敗が通知される
 - `lint-and-build`のステップを増やしたら、`claude-ci-fix.yml`・`claude-pr-repair.yml`の`verify-commands`を同じ内容に直す（[CLAUDE.md](../CLAUDE.md)「検証」）
-- CIのMySQL 8とMariaDBでは、同じ外部キー違反でもエラーコードが違う（MySQLは1452 → PrismaのP2003、
-  MariaDBは1216 → Prismaがマップできず`PrismaClientUnknownRequestError`）。**拒否されることを
-  エラーコードで判定しない**（#44）。`db-tests/helpers.ts`の`assertRejectedByDatabase()`を使い、
-  エラーの種類は問わず「DBまで往復したエラーであること」＋「行が増えていないこと」で確かめる。
-  一意制約（1062 → P2002）はどちらでも同じにマップされるので、そちらはコードで判定してよい
+- 外部キー違反のエラーコードはサーバーのビルドによって1452（→ Prismaの`P2003`）と1216
+  （→ `PrismaClientUnknownRequestError`）に分かれる。**拒否されることを`P2003`だけで判定しない**
+  （#44・#9。詳細と使う関数は[CLAUDE.md](../CLAUDE.md)「検証」）。**これはMariaDBだけの話ではなく、
+  手元のMySQL 8.0.46でも1216が返る**——`db-tests/replenishment-boundary.test.ts`はこの形で落ちており、
+  #7で`assertRejectedByDatabase()`へ揃えた。新しいdb-testを書くときは、はじめから
+  `assertRejectedByDatabase()`か`isForeignKeyViolation()`を使い、`P2003`を直接見ない
 - **サブPCのローカルDBはMySQL 8**（`mysql -u stockly -p -e 'select @@version'`で確認できる）。
   本番（VPS）は共有MariaDBなので、**MariaDB固有の挙動は手元では再現できない**。
   DBの実装差に依存しないテストの書き方（上）で回避する

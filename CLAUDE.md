@@ -44,18 +44,20 @@ Stockly は、食材・飲料・日用品・防災用品を一元管理する家
 
 ```
 src/app/        App Routerのページ・レイアウト。manifest.ts・icon.svg・apple-icon.pngがPWAの定義
-src/app/(app)/  在庫・期限・履歴・補充・保管場所の画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
+src/app/(app)/  在庫・期限・履歴・補充・防災・保管場所・メニューの画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
 src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
 src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations・expiry）と、DBを触るservice・queries・settings
 src/lib/replenishment/ 補充ドメイン（#6）。不足量の算出（shortage）・入力の読み取り（rules）と、service・queries
+src/lib/disaster/ 防災ドメイン（#7）。区分と必要量の定義（rules）・判定（assess）と、queries・settings
 src/lib/notion/    Notion買い物リストへの送信（config・client）。読み取りAPIは使わない
 src/lib/notifications/ 通知（#5）。チャネル境界（channels）・重複防止（service）・期限ジョブ（expiry-job）
 src/lib/time/   日付の境目（tokyo.ts）。期限の「今日」はここだけで決める
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/components/replenishment/ 補充基準のフォーム
+src/components/disaster/ 防災の集計の見せ方（coverage-summary）と基準のフォーム
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
 docs/           テスト戦略・検証基準（testing-strategy.md）とバックアップ・復元手順（backup-restore.md）
@@ -279,6 +281,61 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   設定していない任意のプロパティは送らない——存在しないプロパティを送るとNotionが400を返すため）
 - 送信は1件ずつ`SEND_INTERVAL_MS`（400ms）空け、1回の送信は`MAX_SEND_BATCH_SIZE`（20件）まで。
   Notionのレート制限（平均3リクエスト/秒）に触れないための歯止め
+
+## 防災ストックの判定（#7）
+
+日常の在庫から「非常時に何日ぶんあるか」を出す付加的な集計。**別在庫は作らず、
+`Product`の防災属性（温度帯・加熱/水の要否・用途・内容量/食数/使用回数）だけで判定する。**
+判定は`src/lib/disaster/assess.ts`の純関数で、**生成AIには委ねない**（受入条件）。
+
+- **集計は6区分**（食料・飲料・衛生・照明・電源・熱源）。`EmergencyRole`をどの区分で
+  どの単位で数えるかは`rules.ts`の`DISASTER_CATEGORY_RULES`が正本。**`EmergencyRole`へ値を
+  足したらここも直す**——載っていない役割（`NONE`・`UTILITY_WATER`・`MEDICAL`・`OTHER`）は
+  集計から静かに落ちる
+- **必要量の伸び方は区分ごとに違う**（`scale`）。水・食事・携帯トイレは人数×日数、
+  照明・電源は人数だけ（1人1個。使うほど減らないので**備蓄日数を出さない**）、熱源は日数だけ
+  （家族で1つの火を使う）。**全体の備蓄日数は、日数を出せる区分のうちいちばん短いもの。**
+  平均にすると、水だけ足りている家庭が「2日ぶんある」と読める
+- **数えない在庫は、外した理由つきで必ず画面に出す**（受入条件の「根拠と除外理由を追跡できる」）。
+  理由は期限切れ・期限が要確認・冷蔵・冷凍・開封済み・換算できない・熱源がない・水がない・残量なし。
+  件数だけだと「無い」のか「安全側に倒して数えていない」のかが読み分けられない
+- **冷蔵・冷凍は既定で数えない。** 停電で使えなくなるため。含めるには`includeChilled`／
+  `includeFrozen`を画面で明示的に立てる（**明示設定なしに例外化しない**）。温度帯は
+  **商品と保管場所の厳しいほう**を採る（常温品でも冷蔵庫に入っていれば温まる）
+- **期限切れと期限が未確認（`UNKNOWN`）の在庫は、どの設定でも数えない。** 過大評価を避ける側へ倒す。
+  開封済み（飲みかけ）は既定で数えないが、`includeOpened`で数えられる
+- **加熱・水が要る食料は、熱源・飲料水があるときだけ数える**（既定）。他の区分に依存するため
+  `assess.ts`は**2周に分けて評価する**（1周目で熱源と飲料水の有無を出し、2周目で本判定）。
+  依存はこの一方向だけで循環しない
+- **基準は家庭ごとに`DisasterPlanSetting`が持つ**（人数・目標日数・1人1日あたりの必要量・
+  何を数えるか）。行が無い家庭は`DEFAULT_DISASTER_PLAN`で動く。**スキーマの`@default`と
+  コードの既定値は別々に書いてあるので、片方だけ変えない**（`db-tests/disaster-plan.test.ts`が
+  一致を見ている）
+- **判定結果はテーブルに保存しない。** 在庫が動けば結果は変わるので、残した行はすぐ古くなる。
+  受入条件の「ルールの版を記録し、後から判定結果を再説明できる」は、
+  ①`DISASTER_RULE_VERSION`を基準の保存時に書き、判定結果にも埋める
+  ②ルール版・基準・根拠ロット・除外理由をすべて画面に出す
+  ③`assess.ts`が純関数で、同じ入力なら必ず同じ結果になる——の3つで満たす。
+  **同じ在庫から違う数字が出るようになったら版を上げる**（文言や並び順だけの変更では上げない）
+
+## 画面の行き先（ナビ）
+
+行き先の定義は`src/components/inventory/nav-items.ts`が正本で、`app-nav.tsx`（`"use client"`）
+と`/menu`のページがそれを読む。
+
+- **`"use client"`のファイルから配列をexportしてサーバーコンポーネントで使わない。**
+  クライアント参照のプロキシになり、`OVERFLOW_ITEMS.map is not a function`で落ちる。
+  画面から読むデータは素のモジュール（`nav-items.ts`）へ置く
+- **スマホの下タブは「メニュー」を含めて5つで打ち止め。** 画面幅を等分するため、増やすほど
+  1つずつ細くなって押し分けられなくなる。`ITEMS`へ足しただけの行き先は自動的に
+  `/menu`側へ回るので、**下タブへ入れたい場合は代わりに何を外すかを決める**。
+  PC・iPadの左ナビは縦に伸びるだけなので全項目を並べる
+- **下タブに残すのは、スマホでしかできないことと毎日触るもの**（いまは在庫・読取・期限・履歴）。
+  バーコード読取は`navigator.mediaDevices`がhttpsかlocalhostでしか生えず**実質スマホ専用の
+  入力導線**なので下タブに残す（PCでは左ナビにあるため、外すとカメラを使える側だけが1段深くなる）。
+  防災は読むための集計画面で毎日押すものではないので`/menu`側に置く
+- **現在地は「前方一致の長いもの」で選ぶ。** `/inventory/scan`は`/inventory`の下にあるため、
+  単純な先頭一致だと読取の画面で「在庫」が光る（`nav-items.ts`の`matches`）
 
 ## 期限と通知
 

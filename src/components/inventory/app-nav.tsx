@@ -1,46 +1,33 @@
 "use client";
 
+import type { ComponentType } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, CalendarClock, History, MapPin, ScanLine, ShoppingCart } from "lucide-react";
 import { cn } from "cn";
 
+import { BOTTOM_ITEMS, ITEMS } from "./nav-items";
+
 /**
- * 在庫まわりの行き先。PCでは左の列、スマホでは画面下のタブとして同じ内容を出す。
+ * 在庫まわりのナビ。行き先の定義そのものは`nav-items.ts`にある
+ * （このファイルは`"use client"`のため、サーバーコンポーネントから配列を読めない）。
  *
  * 現在地の判定にパスが要るためクライアントコンポーネントにしてある。
  * `/inventory/scan`は「在庫」の下にあるが行き先としては「読取」なので、
  * **前方一致の長いものを優先して選ぶ**（単純な先頭一致だと、読取の画面で「在庫」が光る）。
  */
-const ITEMS = [
-  { href: "/inventory", label: "在庫", icon: Boxes, matches: ["/inventory"] },
-  { href: "/inventory/scan", label: "読取", icon: ScanLine, matches: ["/inventory/scan", "/barcodes"] },
-  { href: "/expiry", label: "期限", icon: CalendarClock, matches: ["/expiry"] },
-  { href: "/history", label: "履歴", icon: History, matches: ["/history"] },
-  { href: "/replenishment", label: "補充", icon: ShoppingCart, matches: ["/replenishment"] },
-  { href: "/storage", label: "保管場所", icon: MapPin, matches: ["/storage"] },
-] as const;
+interface NavEntry {
+  readonly href: string;
+  readonly label: string;
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly matches: readonly string[];
+}
 
-/**
- * 下タブの列数。**`grid-cols-${n}`のような動的なクラス名はTailwindが拾えない**ため、
- * 使いうる列数のクラスを並べて`ITEMS.length`で引く。
- *
- * 行き先を足すIssueが同時に走っている（#5・#9）。ここを`grid-cols-4`と決め打ちにすると、
- * 項目を足す全員が同じ1行を書き換えることになり、必ず衝突する。
- */
-const BOTTOM_NAV_COLUMNS: Readonly<Record<number, string>> = {
-  3: "grid-cols-3",
-  4: "grid-cols-4",
-  5: "grid-cols-5",
-  6: "grid-cols-6",
-};
-
-function useCurrent(): string {
+function useCurrent(items: readonly NavEntry[]): string {
   const pathname = usePathname();
 
   let current = "";
   let longest = 0;
-  for (const item of ITEMS) {
+  for (const item of items) {
     for (const prefix of item.matches) {
       if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) continue;
       if (prefix.length <= longest) continue;
@@ -51,9 +38,9 @@ function useCurrent(): string {
   return current;
 }
 
-/** PC・iPad用の縦のナビ。 */
+/** PC・iPad用の縦のナビ。全項目を並べる。 */
 export function SideNav() {
-  const current = useCurrent();
+  const current = useCurrent(ITEMS);
 
   return (
     <nav className="flex flex-col gap-1">
@@ -80,20 +67,16 @@ export function SideNav() {
 /**
  * スマホ用の下タブ。
  *
- * 片手で押せる位置に主要な行き先を置く。`pb-[env(safe-area-inset-bottom)]`は、
- * ホーム画面から起動したときにホームバーへ潜り込ませないため。
+ * 片手で押せる位置に主要な行き先を置き、5つ目を「メニュー」にしてそれ以外の行き先を渡す。
+ * `pb-[env(safe-area-inset-bottom)]`は、ホーム画面から起動したときにホームバーへ
+ * 潜り込ませないため。
  */
 export function BottomNav() {
-  const current = useCurrent();
+  const current = useCurrent(BOTTOM_ITEMS);
 
   return (
-    <nav
-      className={cn(
-        "bg-background/95 fixed inset-x-0 bottom-0 z-20 grid border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden",
-        BOTTOM_NAV_COLUMNS[ITEMS.length] ?? "grid-cols-4",
-      )}
-    >
-      {ITEMS.map(({ href, label, icon: Icon }) => (
+    <nav className="bg-background/95 fixed inset-x-0 bottom-0 z-20 grid grid-cols-5 border-t pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
+      {BOTTOM_ITEMS.map(({ href, label, icon: Icon }) => (
         <Link
           key={href}
           href={href}

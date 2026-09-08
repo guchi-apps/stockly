@@ -7,9 +7,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
-import { Prisma } from "@prisma/client";
-
-import { createHousehold, deleteHousehold, prisma } from "./helpers.ts";
+import { createHousehold, deleteHousehold, isUniqueViolation, prisma } from "./helpers.ts";
 
 const createdHouseholdIds: string[] = [];
 
@@ -19,10 +17,6 @@ after(async () => {
   }
   await prisma.$disconnect();
 });
-
-function isUniqueViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
-}
 
 function delivery(householdId: string, dedupeKey: string) {
   return {

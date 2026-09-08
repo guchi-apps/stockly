@@ -65,12 +65,15 @@ model Household {
   transactions     InventoryTransaction[]
 
   // 補充とNotion買い物リスト連携（#6）。
-  replenishmentRules ReplenishmentRule[]
+  replenishmentRules  ReplenishmentRule[]
   shoppingListEntries ShoppingListEntry[]
 
   // 期限と通知（#5）。
   expirySetting          ExpirySetting?
   notificationDeliveries NotificationDelivery[]
+
+  // 防災ストックの判定（#7）。
+  disasterPlanSetting DisasterPlanSetting?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -168,6 +171,11 @@ enum TemperatureZone {
 }
 
 /// 非常時にその商品が担う役割。防災判定の集計軸。
+///
+/// **`src/lib/disaster/rules.ts`の`DISASTER_CATEGORY_RULES`が、この値を6区分
+/// （食料・飲料・衛生・照明・電源・熱源）へ割り当てる。** 値を足したら、どの区分で数えるか
+/// （またはどの区分でも数えないか）をあちらにも書くこと。書き忘れた役割は防災の集計から
+/// 静かに落ちる。
 enum EmergencyRole {
   NONE
   STAPLE_FOOD // 主食
@@ -176,6 +184,8 @@ enum EmergencyRole {
   UTILITY_WATER // 生活用水
   HEAT_SOURCE // 熱源（カセットボンベ等）
   SANITATION // 衛生
+  LIGHTING // 照明（ライト・ランタン）
+  POWER // 電源（モバイルバッテリー・乾電池）
   MEDICAL // 医療
   OTHER
 }
@@ -270,23 +280,23 @@ model Product {
   note        String? @db.Text
 
   /// 在庫数量の既定の単位。ロットごとに別の単位を使うこともできる。
-  defaultUnit UnitCode @default(PIECE)
+  defaultUnit     UnitCode  @default(PIECE)
   /// 1defaultUnitあたりの内容量（例: 1本 = 500 MILLILITER）。容量での集計に使う。
-  contentAmount Decimal?  @db.Decimal(14, 3)
-  contentUnit   UnitCode?
+  contentAmount   Decimal?  @db.Decimal(14, 3)
+  contentUnit     UnitCode?
   /// 1defaultUnitあたりの食数・使用回数。防災の「何日分あるか」の集計に使う。
-  servingsPerUnit Decimal? @db.Decimal(14, 3)
-  usesPerUnit     Decimal? @db.Decimal(14, 3)
+  servingsPerUnit Decimal?  @db.Decimal(14, 3)
+  usesPerUnit     Decimal?  @db.Decimal(14, 3)
 
   // --- 防災判定用の属性 ---
   /// 保管に必要な温度帯。AMBIENTなら停電時も置いておける。
-  temperatureZone TemperatureZone @default(AMBIENT)
+  temperatureZone    TemperatureZone @default(AMBIENT)
   /// 食べる・使うのに加熱が要るか。
-  requiresHeating Boolean         @default(false)
+  requiresHeating    Boolean         @default(false)
   /// 食べる・使うのに水が要るか（アルファ米など）。
-  requiresWater   Boolean         @default(false)
+  requiresWater      Boolean         @default(false)
   /// 非常時に担う役割。
-  emergencyRole   EmergencyRole   @default(NONE)
+  emergencyRole      EmergencyRole   @default(NONE)
   /// 上の固定列で表せない防災判定用の属性を足すための逃がし先。
   /// 判定に恒常的に使う属性は、ここではなく列として切り出すこと。
   disasterAttributes Json?
@@ -706,7 +716,7 @@ model NotificationDelivery {
   dedupeKey String @db.VarChar(120)
 
   title   String
-  body    String  @db.Text
+  body    String @db.Text
   /// 通知の対象（ロットidと状態）。あとから「何を根拠に送ったか」を追えるようにする。
   payload Json?
 
@@ -725,4 +735,63 @@ model NotificationDelivery {
   @@unique([householdId, id])
   @@unique([householdId, channel, dedupeKey])
   @@index([householdId, kind, sentAt])
+}
+
+// ===========================================================================
+// 防災ストックの判定（#7）
+// ===========================================================================
+
+/// 家庭ごとの防災の基準（#7）。無い家庭は`DEFAULT_DISASTER_PLAN`と同じ既定値で動くため、
+/// 家庭を作るたびに行を用意しなくてよい（`ExpirySetting`と同じ考え方）。
+///
+/// **判定そのものはこのテーブルに保存しない。** 在庫が動けば結果は変わるので、残した行は
+/// すぐ古くなる。「後から判定結果を再説明できる」ことは、
+/// 「ルール版・基準・根拠ロット・除外理由を画面に出す」＋「同じ入力なら必ず同じ結果になる」
+/// （`src/lib/disaster/assess.ts`は純関数で、乱数も現在時刻の暗黙参照も持たない）で満たす。
+model DisasterPlanSetting {
+  id          String @id @default(cuid())
+  householdId String @unique
+
+  /// 何人ぶんを、何日ぶん備えるか。必要量はこの2つに1人1日あたりの量を掛けて出す。
+  peopleCount Int @default(2)
+  targetDays  Int @default(3)
+
+  // --- 1人1日あたりの必要量 ---
+  /// 飲料水（L / 人日）。飲用と調理をあわせた一般的な目安が3L。
+  waterLitersPerPersonDay    Decimal @default(3) @db.Decimal(14, 3)
+  /// 食事（食 / 人日）。1食は商品の`servingsPerUnit`で数える。
+  foodServingsPerPersonDay   Decimal @default(3) @db.Decimal(14, 3)
+  /// 携帯トイレ（回 / 人日）。衛生の必要量として数える。
+  sanitationUsesPerPersonDay Decimal @default(5) @db.Decimal(14, 3)
+
+  // --- 人日ではない基準 ---
+  /// 照明（個 / 人）。使うほど減るものではないので日数では増やさない。
+  lightingUnitsPerPerson Decimal @default(1) @db.Decimal(14, 3)
+  /// 電源（個 / 人）。同上。
+  powerUnitsPerPerson    Decimal @default(1) @db.Decimal(14, 3)
+  /// 熱源（回 / 日）。家族で1つの火を使う想定なので人数では増やさない。
+  heatSourceUsesPerDay   Decimal @default(1) @db.Decimal(14, 3)
+
+  // --- 何を数えるか ---
+  /// 冷蔵・冷凍の在庫を防災の日数に含めるか。**停電で使えなくなる前提なので既定はfalse。**
+  /// 受入条件の「明示設定なしに例外化しない」がこの2列。
+  includeChilled              Boolean @default(false)
+  includeFrozen               Boolean @default(false)
+  /// 開封済み（飲みかけ・使いかけ）を数えるか。残量と衛生状態が分からないため既定はfalse。
+  includeOpened               Boolean @default(false)
+  /// 加熱が要る食料を、熱源の在庫があるときだけ数えるか。
+  requireHeatSourceForHeating Boolean @default(true)
+  /// 水が要る食料を、飲料水の在庫があるときだけ数えるか。
+  requireWaterForRehydration  Boolean @default(true)
+
+  /// 保存した時点の判定ルールの版（`DISASTER_RULE_VERSION`）。
+  /// 判定結果と一緒に画面へ出し、あとから「どの規則で出した数字か」を辿れるようにする。
+  ruleVersion String @default("v1") @db.VarChar(20)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, id])
 }
