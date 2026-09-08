@@ -84,9 +84,14 @@ curl -s -b /tmp/c.txt http://localhost:28002/       # ログイン後の画面
 | `pnpm db:migrate:dev` / `pnpm db:migrate:deploy` | Prismaマイグレーション |
 | `pnpm db:seed` | 在庫のサンプルデータ投入（`prisma/seed.ts`。`db:seed:dev`の家庭へ入れる） |
 | `pnpm db:seed:fixture` | 受入条件の確認用データ投入（`prisma/fixtures/daily-inventory.ts`。防災バッグ一式・水10L・期限切れなど） |
+| `pnpm test:db` | 実DBに接続してDB制約・再構築を検証する（先に`db:migrate:deploy` → `db:seed`） |
+| `pnpm db:rebuild-quantities` | 在庫数量（集計値）と入出庫履歴（正本）のずれを一覧する。`-- --apply`で履歴の合計へ戻す |
 
 `develop`・`main`向けのPull Requestでは、CI（`.github/workflows/ci.yml`）が上の
-lint・型チェック・テスト・ビルドを実行します。
+lint・型チェック・テスト・ビルドに加え、本番ビルドを起動して開発用ログインが無効なことを確かめる
+スモーク（`scripts/check-dev-login-disabled.sh`）と、実DBでの制約テスト（`pnpm test:db`）を実行します。
+どの層で何を検証するかは[docs/testing-strategy.md](docs/testing-strategy.md)、
+バックアップと復元の手順は[docs/backup-restore.md](docs/backup-restore.md)を参照してください。
 
 ## アプリアイコン
 
