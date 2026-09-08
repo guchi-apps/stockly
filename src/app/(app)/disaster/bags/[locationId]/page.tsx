@@ -93,6 +93,13 @@ export default async function DisasterBagPage({
           判定は防災ストックと同じルール。目標だけこのバッグのものを使います
         </span>
       </h2>
+      <p className="text-muted-foreground px-4 pt-3 text-[11px] leading-relaxed md:px-6">
+        数えているのはこのバッグの中身だけですが、
+        <b className="text-foreground font-semibold">加熱に要る熱源と、戻すのに要る水は家全体の在庫で見ています</b>
+        。カセットボンベを食品棚に置いていても、バッグの中のカップ麺は食べられるためです。
+        全体の備蓄日数はここには出しません（バッグ1つで何日という数字は、
+        家全体の備えとして読み違えやすいため）。
+      </p>
       <ul className="grid grid-cols-1 gap-2.5 px-4 py-4 sm:grid-cols-2 md:grid-cols-3 md:px-6">
         {assessment.categories.map((category) => (
           <BagCoverageRow

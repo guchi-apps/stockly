@@ -182,7 +182,15 @@ function baseExclusion(
   return null;
 }
 
-interface Availability {
+/**
+ * 加熱・水が要る食料を数えてよいかの前提。
+ *
+ * **どの範囲の在庫から出すかは呼び出し側が決められる。** 家庭全体の判定では渡された在庫から
+ * そのまま出すが、防災バッグ1つに絞った判定（#8）では**家全体の熱源・飲料水**を見る必要がある。
+ * バッグの中だけで見ると、家にカセットボンベがあってもバッグに入っていない限り
+ * 「熱源がない」でカップ麺が落ち、点検の画面が実態より厳しく出る。
+ */
+export interface DisasterAvailability {
   readonly hasHeatSource: boolean;
   readonly hasWater: boolean;
 }
@@ -192,7 +200,7 @@ function judge(
   lot: DisasterLotSnapshot,
   rule: DisasterCategoryRule,
   plan: DisasterPlanValue,
-  availability: Availability | null,
+  availability: DisasterAvailability | null,
 ): DisasterLotVerdict {
   const countedAmount = toCategoryUnit(lot, rule);
   const base = baseExclusion(lot, plan);
@@ -220,16 +228,43 @@ function sumIncluded(verdicts: readonly DisasterLotVerdict[]): Decimal {
 }
 
 /**
+ * 1周目。加熱・水の判定を切って、熱源と飲料水が実際にあるかだけを見る。
+ *
+ * ここだけを別に呼べるようにしてあるのは、**算入量を数える範囲と、供給の有無を見る範囲を
+ * 分けたい場面があるため**（#8の防災バッグ。バッグの中身だけを数えつつ、熱源と水は家全体で見る）。
+ * 依存はこの一方向だけで、循環しない。
+ */
+export function resolveAvailability(
+  lots: readonly DisasterLotSnapshot[],
+  plan: DisasterPlanValue,
+): DisasterAvailability {
+  const of = (key: "HEAT" | "WATER"): boolean => {
+    const rule = DISASTER_CATEGORY_RULES.find((item) => item.key === key) as DisasterCategoryRule;
+    return sumIncluded(
+      lots
+        .filter((lot) => categoryOfRole(lot.role) === key)
+        .map((lot) => judge(lot, rule, plan, null)),
+    ).greaterThan(0);
+  };
+  return { hasHeatSource: of("HEAT"), hasWater: of("WATER") };
+}
+
+/**
  * 在庫をまとめて判定する。
  *
  * `lots`には家庭の在庫をそのまま渡してよい。役割がどの区分にも当たらないもの
  * （`NONE`・`UTILITY_WATER`・`MEDICAL`・`OTHER`）は、防災の候補ではないのでここで落とす
  * （「数えなかった在庫」にも出さない——外したのではなく、はじめから対象外のため）。
+ *
+ * `availability`を省略すると`lots`から出す（家庭全体の判定はこれでよい）。**在庫の一部だけを
+ * 渡すときは、供給の有無を家庭全体から出して明示的に渡すこと**——渡さないと、熱源や水が
+ * 別の場所にあっても「無い」と判定される（#8の防災バッグ）。
  */
 export function assessDisasterStock(
   lots: readonly DisasterLotSnapshot[],
   plan: DisasterPlanValue,
   ruleVersion: string = DISASTER_RULE_VERSION,
+  availability: DisasterAvailability = resolveAvailability(lots, plan),
 ): DisasterAssessment {
   const byCategory = new Map<DisasterCategory, DisasterLotSnapshot[]>();
   for (const rule of DISASTER_CATEGORY_RULES) byCategory.set(rule.key, []);
@@ -239,21 +274,7 @@ export function assessDisasterStock(
     byCategory.get(key)?.push(lot);
   }
 
-  // 1周目。加熱・水の判定を切って、熱源と飲料水が実際にあるかだけを見る。
-  const heatRule = DISASTER_CATEGORY_RULES.find((rule) => rule.key === "HEAT") as DisasterCategoryRule;
-  const waterRule = DISASTER_CATEGORY_RULES.find(
-    (rule) => rule.key === "WATER",
-  ) as DisasterCategoryRule;
-  const availability: Availability = {
-    hasHeatSource: sumIncluded(
-      (byCategory.get("HEAT") ?? []).map((lot) => judge(lot, heatRule, plan, null)),
-    ).greaterThan(0),
-    hasWater: sumIncluded(
-      (byCategory.get("WATER") ?? []).map((lot) => judge(lot, waterRule, plan, null)),
-    ).greaterThan(0),
-  };
-
-  // 2周目。1周目で分かった供給を前提に本判定する。
+  // 2周目。1周目（`resolveAvailability()`）で分かった供給を前提に本判定する。
   const categories = DISASTER_CATEGORY_RULES.map((rule) => {
     const verdicts = (byCategory.get(rule.key) ?? []).map((lot) =>
       judge(lot, rule, plan, availability),

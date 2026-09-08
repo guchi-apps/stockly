@@ -8,6 +8,12 @@
  * **目標（人数・日数）だけ**で、必要量の出し方も除外の条件も家庭の判定と同じものを使う
  * （受入条件の「UI内に別ルールを重複実装しない」）。
  *
+ * **数える範囲はバッグの中身だが、熱源と飲料水の有無だけは家庭全体で見る。**
+ * `assessDisasterStock()`は既定で「渡された在庫」から供給を出すため、バッグに絞ったまま
+ * 呼ぶと、家にカセットボンベがあってもバッグに入っていない限り「熱源がない」で
+ * カップ麺が落ちる。実態より厳しい数字になり、点検で何を足せばよいかを読み違える。
+ * そのため`resolveAvailability()`を家庭全体の在庫に対して1度だけ呼び、結果を渡す。
+ *
  * 在庫側と同じく、画面から`db.*.findMany()`を直接呼ばず必ずここを通す。
  * 先頭で`scopeToHousehold()`を通し、そこで返った`householdId`だけをwhereに使う。
  */
@@ -22,7 +28,9 @@ import { tokyoToday } from "@/lib/time/tokyo";
 
 import {
   assessDisasterStock,
+  resolveAvailability,
   type DisasterAssessment,
+  type DisasterAvailability,
   type DisasterLotSnapshot,
   type DisasterLotVerdict,
 } from "./assess.ts";
@@ -40,7 +48,7 @@ import {
   type DisasterBagPlanValue,
   type InspectionState,
 } from "./bag.ts";
-import { perUnitEquivalentsOf } from "./queries.ts";
+import { loadDisasterLots, perUnitEquivalentsOf } from "./queries.ts";
 import { categoryOfRole, DISASTER_RULE_VERSION, type DisasterCategory } from "./rules.ts";
 import { readDisasterPlanSettings } from "./settings.ts";
 
@@ -222,6 +230,26 @@ function attachVerdicts(
     );
 }
 
+/**
+ * バッグ1つぶんの判定。
+ *
+ * 目標だけバッグのものへ差し替え、**供給（熱源・飲料水）は家庭全体で出した値を渡す。**
+ * 判定そのものは`assess.ts`の純関数がすべて行う。
+ */
+function assessBag(
+  snapshots: readonly DisasterLotSnapshot[],
+  householdPlan: Parameters<typeof toBagPlan>[0],
+  bagPlan: DisasterBagPlanValue,
+  availability: DisasterAvailability,
+): DisasterAssessment {
+  return assessDisasterStock(
+    snapshots,
+    toBagPlan(householdPlan, bagPlan),
+    undefined,
+    availability,
+  );
+}
+
 function toBagPlanValue(row: {
   peopleCount: number;
   targetDays: number;
@@ -292,6 +320,12 @@ export async function listDisasterBags(
     if (lot.storageLocationId) byLocation.get(lot.storageLocationId)?.push(lot);
   }
 
+  // 熱源・飲料水の有無は家庭全体で見る（バッグの中だけで見ると実態より厳しく出る）。
+  const availability = resolveAvailability(
+    await loadDisasterLots(householdId, now),
+    householdSettings.plan,
+  );
+
   const summaries = locations.map((location) => {
     const { plan, isDefault } = toBagPlanValue(location.disasterBag);
     const { contents, snapshots } = buildContents(
@@ -299,7 +333,7 @@ export async function listDisasterBags(
       now,
       policy,
     );
-    const assessment = assessDisasterStock(snapshots, toBagPlan(householdSettings.plan, plan));
+    const assessment = assessBag(snapshots, householdSettings.plan, plan, availability);
 
     return {
       storageLocationId: location.id,
@@ -359,7 +393,7 @@ export async function getDisasterBag(
   });
   if (!location) return null;
 
-  const [householdSettings, expirySettings, lots] = await Promise.all([
+  const [householdSettings, expirySettings, lots, householdLots] = await Promise.all([
     readDisasterPlanSettings(householdId),
     readExpirySettings(householdId),
     db.stockLot.findMany({
@@ -367,11 +401,17 @@ export async function getDisasterBag(
       orderBy: { createdAt: "asc" },
       select: LOT_SELECT,
     }) as unknown as Promise<LotRow[]>,
+    loadDisasterLots(householdId, now),
   ]);
 
   const { plan, isDefault } = toBagPlanValue(location.disasterBag);
   const { contents, snapshots } = buildContents(lots, now, toExpiryPolicy(expirySettings));
-  const assessment = assessDisasterStock(snapshots, toBagPlan(householdSettings.plan, plan));
+  const assessment = assessBag(
+    snapshots,
+    householdSettings.plan,
+    plan,
+    resolveAvailability(householdLots, householdSettings.plan),
+  );
   const inspections = location.disasterBag?.inspections ?? [];
 
   return {

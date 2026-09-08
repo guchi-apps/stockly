@@ -4,7 +4,11 @@ import { describe, it } from "node:test";
 import { resolveExpiry } from "../inventory/operations.ts";
 import { Decimal, type Quantity, type UnitCode } from "../inventory/units.ts";
 
-import { assessDisasterStock, type DisasterLotSnapshot } from "./assess.ts";
+import {
+  assessDisasterStock,
+  resolveAvailability,
+  type DisasterLotSnapshot,
+} from "./assess.ts";
 import {
   attentionOf,
   countForInspection,
@@ -365,6 +369,65 @@ describe("初期データの防災バッグ", () => {
     assert.equal(counts.itemCount, 6);
     assert.equal(counts.expiredCount, 0);
     assert.equal(counts.unknownExpiryCount, 1);
+  });
+});
+
+describe("熱源・水の有無は家全体で見る", () => {
+  const plan = toBagPlan(DEFAULT_DISASTER_PLAN, DEFAULT_DISASTER_BAG_PLAN);
+
+  /** バッグにはカップ麺だけが入っていて、熱源も水も入っていない状態。 */
+  const bagLots: DisasterLotSnapshot[] = [
+    {
+      ...lot({ name: "カップ麺", amount: "2", unit: "PIECE", role: "STAPLE_FOOD", bestBeforeDays: 100 }),
+      requiresHeating: true,
+      requiresWater: true,
+      perUnitEquivalents: [{ amount: new Decimal(1), unit: "SERVING" }],
+    },
+  ];
+
+  /** 家全体には、食品棚にカセットボンベと水がある（初期データと同じ配置）。 */
+  const householdLots: DisasterLotSnapshot[] = [
+    ...bagLots,
+    lot({ name: "カセットボンベ", amount: "3", unit: "USE", role: "HEAT_SOURCE", bestBeforeDays: 900 }),
+    lot({
+      name: "天然水 2L",
+      amount: "5",
+      unit: "BOTTLE",
+      role: "DRINKING_WATER",
+      bestBeforeDays: 500,
+      perUnitEquivalents: [{ amount: new Decimal(2000), unit: "MILLILITER" }],
+    }),
+  ];
+
+  it("バッグの中だけで供給を見ると、家に熱源があってもカップ麺が落ちる", () => {
+    const assessment = assessDisasterStock(bagLots, plan);
+    const food = assessment.categories.find((category) => category.rule.key === "FOOD")!;
+    assert.equal(food.includedAmount.toString(), "0");
+    assert.equal(food.excludedLots[0]?.exclusion, "NO_HEAT_SOURCE");
+  });
+
+  it("家全体の供給を渡すと、バッグのカップ麺を数えられる", () => {
+    const availability = resolveAvailability(householdLots, plan);
+    assert.deepEqual(availability, { hasHeatSource: true, hasWater: true });
+
+    const assessment = assessDisasterStock(bagLots, plan, undefined, availability);
+    const food = assessment.categories.find((category) => category.rule.key === "FOOD")!;
+    assert.equal(food.includedAmount.toString(), "2");
+    assert.equal(food.excludedLots.length, 0);
+  });
+
+  it("供給を省略したときの結果は、渡された在庫から出したものと同じ（家庭全体の判定は変わらない）", () => {
+    const implicit = assessDisasterStock(householdLots, plan);
+    const explicit = assessDisasterStock(
+      householdLots,
+      plan,
+      undefined,
+      resolveAvailability(householdLots, plan),
+    );
+    assert.equal(
+      implicit.categories.map((c) => c.includedAmount.toString()).join(","),
+      explicit.categories.map((c) => c.includedAmount.toString()).join(","),
+    );
   });
 });
 
