@@ -109,7 +109,7 @@ export function ConsumeCandidateCard({
         <div className="flex flex-wrap items-center gap-2">
           <b className="text-[15px] font-bold">{item.product?.name ?? item.detectedLabel}</b>
           <ExpiryBadge expiry={resolveExpiry(lot, new Date())} />
-          {lot.openedAt ? <Badge variant="outline">開封済み</Badge> : null}
+          {lot.openedAt ? <Badge variant="outline">使用中</Badge> : null}
         </div>
 
         <p className="text-muted-foreground text-xs">

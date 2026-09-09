@@ -252,7 +252,7 @@ export function selectLot(
   const lot = sorted[0];
 
   if (pool !== inStock) {
-    return { lot, reason: "開封済みのロットを対象にしています" };
+    return { lot, reason: "使用中のロットを対象にしています" };
   }
   if (inStock.length > 1) {
     return { lot, reason: "同じ商品のロットのうち、期限がいちばん近いものを選んでいます" };
