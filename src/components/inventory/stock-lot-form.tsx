@@ -279,7 +279,7 @@ export function StockLotForm({
             defaultChecked={state.values.opened === "on" || initial.opened === true}
             className="size-4"
           />
-          開封済み（開封後の期限として扱う）
+          使用中（同じ商品の他のロットが使用中なら自動的に未使用に戻します）
         </label>
 
         <Field label="メモ" error={state.errors.note} htmlFor="note">

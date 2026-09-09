@@ -192,7 +192,7 @@ export default async function DisasterPage({ searchParams }: PageProps<"/disaste
               )}
               <p className="text-muted-foreground border-t px-3 py-2.5 text-[11px] leading-relaxed">
                 数えなかったものは「無い」ではなく「安全側に倒して数えていない」です。
-                期限や開封状態を入れ直すと、次の判定から算入されます。
+                期限や使用状況を入れ直すと、次の判定から算入されます。
               </p>
             </section>
           </div>
