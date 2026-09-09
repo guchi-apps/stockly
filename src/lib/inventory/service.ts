@@ -23,9 +23,9 @@ import { buildReversal, type LedgerEntry } from "./ledger.ts";
 import {
   InventoryInputError,
   applyRecordToLot,
-  convertLotUnit,
   formatQuantityWithUnit,
   nextLotStatus,
+  resolveUnitChangeAdjustment,
   signedDelta,
   type ExpiryKind,
   type ProductDisasterFormValue,
@@ -469,9 +469,10 @@ export interface UpdateStockLotParams {
  *
  * 数量・単位が変わった場合は、直接書き換えず「訂正（ADJUST）」を1件積んで差分を反映する
  * （#56）。単位を変えたときの差分は、**現在数量を新しい単位へ換算した値と、入力された数量の差**
- * で求める（`convertLotUnit()`）。「kgのつもりでgを選んでしまった」のような登録ミスの訂正を
- * 想定しており、数量欄の数字自体は入力されたとおり正しい前提で扱う（自動では換算しない）。
- * 数量・単位以外（保管場所・期限・メモ）は履歴に残さない。
+ * で求める（`resolveUnitChangeAdjustment()`。換算後の値が小数3桁に収まらない場合は拒否する）。
+ * 「kgのつもりでgを選んでしまった」のような登録ミスの訂正を想定しており、数量欄の数字自体は
+ * 入力されたとおり正しい前提で扱う（自動では換算しない）。数量・単位以外（保管場所・期限・メモ）は
+ * 履歴に残さない。
  *
  * 商品名・カテゴリの変更は、ロットの参照先を別の商品へ付け替えるのではなく、
  * **商品そのものの名前を直す**。付け替えると、すでに積んだ履歴の`productId`だけが
@@ -496,10 +497,21 @@ export async function updateStockLot(
       const lot = await loadLotForUpdate(tx, householdId, params.lotId);
       assertNotStale(lot.updatedAt, params.expectedUpdatedAt, lot.quantity, lot.unit);
 
+      // 訂正の差分を先に確かめる（単位が同じなら換算は素通りする。DBに収まらない換算は
+      // 書き込む前にここで拒否する）。
+      const adjustment = resolveUnitChangeAdjustment(
+        quantity(lot.quantity, lot.unit),
+        params.unit,
+        params.amount,
+      );
+
       const productChanges: { name?: string; categoryId?: string | null; defaultUnit?: UnitCode } = {};
       if (params.productName !== lot.product.name) productChanges.name = params.productName;
       if (categoryId !== lot.product.categoryId) productChanges.categoryId = categoryId;
-      if (params.unit !== lot.product.defaultUnit) productChanges.defaultUnit = params.unit;
+      // 単位を明示的に変えたときだけ商品マスタへ書き戻す。ロットの単位を触っていない保存で
+      // `Product.defaultUnit`を見て判定すると、別のロットで学習した既定単位が
+      // このロットの（変えていない）単位へ巻き戻ってしまう（計画レビューでの指摘）。
+      if (params.unit !== lot.unit) productChanges.defaultUnit = params.unit;
       if (Object.keys(productChanges).length > 0) {
         try {
           await tx.product.update({ where: { id: lot.productId }, data: productChanges });
@@ -512,9 +524,7 @@ export async function updateStockLot(
         }
       }
 
-      const currentInTargetUnit = convertLotUnit(quantity(lot.quantity, lot.unit), params.unit);
-      const difference = params.amount.sub(currentInTargetUnit.amount);
-      if (!difference.isZero()) {
+      if (adjustment !== null) {
         await tx.inventoryTransaction.create({
           data: {
             id: params.operationId,
@@ -523,7 +533,7 @@ export async function updateStockLot(
             productId: lot.productId,
             memberId,
             type: "ADJUST",
-            quantityDelta: difference,
+            quantityDelta: adjustment,
             unit: params.unit,
             occurredAt: new Date(),
             note: "編集画面での訂正",

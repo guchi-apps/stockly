@@ -243,6 +243,34 @@ export function convertLotUnit(current: Quantity, targetUnit: UnitCode): Quantit
 }
 
 /**
+ * 単位を変更したときに積む「訂正（ADJUST）」の差分。変更が無ければ`null`。
+ *
+ * g⇔kg・mL⇔Lは1000倍の換算なので、換算後の現在数量が小数4桁以上になることがある
+ * （`123.456g`→`0.123456kg`）。`StockLot.quantity`・`InventoryTransaction.quantityDelta`は
+ * DBの`Decimal(14,3)`で小数3桁までしか持てないため、収まらない差分を黙って丸めて書き込むと
+ * 丸めた分だけ集計値と履歴が恒久的にずれる（`verifyLotQuantity()`が以後ずっと不一致を検出し続ける）。
+ * 丸めて通す代わりに、収まらない場合はここで拒否する（計画レビューでの指摘）。
+ */
+export function resolveUnitChangeAdjustment(
+  current: Quantity,
+  targetUnit: UnitCode,
+  enteredAmount: Decimal,
+): Decimal | null {
+  const converted = convertLotUnit(current, targetUnit);
+  const difference = enteredAmount.sub(converted.amount);
+  if (difference.isZero()) return null;
+
+  if (difference.decimalPlaces() > QUANTITY_SCALE) {
+    throw new InventoryInputError(
+      "unit",
+      `この単位には現在の数量がちょうど収まりません（小数第${QUANTITY_SCALE}位まで）。` +
+        "数量を先に直すか、この単位への変更をやめてください。",
+    );
+  }
+  return difference;
+}
+
+/**
  * 数量からロットの状態を決める。ちょうど0になったロットは一覧の既定の表示から外す。
  *
  * **負の数量はACTIVEのまま残す。** 取消で数量が負になることはありうる
