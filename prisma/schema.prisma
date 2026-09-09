@@ -42,6 +42,9 @@ model User {
 
   memberships HouseholdMember[]
 
+  /// 自分が発行した招待（#12）。招待した本人を画面に出すためだけに持つ。
+  sentInvitations HouseholdInvitation[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -79,6 +82,9 @@ model Household {
   disasterBags            DisasterBag[]
   disasterBagInspections  DisasterBagInspection[]
 
+  // 家庭内共有（#12）。
+  invitations HouseholdInvitation[]
+
   // 写真からの登録候補（#10）。
   intakeBatches     IntakeBatch[]
   intakeImages      IntakeImage[]
@@ -99,6 +105,15 @@ model HouseholdMember {
   userId      String
   role        HouseholdRole @default(MEMBER)
 
+  /// 家庭から外れた日時。**nullのときだけ所属している**（#12）。
+  ///
+  /// 除名・脱退で行そのものを消さないのは、入出庫履歴が`[householdId, memberId]`でこの行を
+  /// 記録者として参照しており（`onDelete: Restrict`）、消すと履歴から「誰が記録したか」が
+  /// 失われるため。所属の判定は`src/lib/household/store.ts`の2つのクエリだけが行い、
+  /// **そこで必ず`removedAt: null`で絞る**。ここを緩めると外した人が在庫へ戻れる。
+  /// 招待をもう一度受け入れると、この行が作り直されずに`removedAt`が消えて復帰する。
+  removedAt DateTime?
+
   household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -118,11 +133,57 @@ model HouseholdMember {
   @@index([userId])
 }
 
-/// 家庭内での権限。今回は所属の有無だけで境界を判定し、ここでの差はまだ付けていない。
-/// 招待・共有を扱うIssueで、OWNERだけができる操作（家庭の削除・メンバーの除名）を足す。
+/// 家庭内での権限。データの境界（どの家庭を見られるか）は所属の有無だけで決まり、
+/// この役割は**家庭そのものを変える操作**（招待・除名・役割の変更・家庭名の変更）を
+/// OWNERだけに限るために使う（#12）。判定は`src/lib/household/members.ts`が持つ。
 enum HouseholdRole {
   OWNER
   MEMBER
+}
+
+/// 家庭への招待（#12）。
+///
+/// メールを送る仕組みをまだ持たないため、**リンクを発行して本人へ手渡しする**運用にしている。
+/// リンクを知っていれば誰でも開けてしまうので、次の3つで受け入れられる範囲を絞る。
+///
+/// 1. `email` — このアドレスでログインしている人しか受け入れられない
+/// 2. `expiresAt` — 発行から7日で切れる
+/// 3. `revokedAt` — 発行した側がいつでも無効にできる
+///
+/// **トークンの平文は保存しない。** 保存するのはSHA-256（`tokenHash`）だけで、平文は発行直後の
+/// 画面に一度出すのみ。DBが漏れてもリンクとしては使えないようにするため。
+model HouseholdInvitation {
+  id String @id @default(cuid())
+
+  householdId String
+  /// 宛先。`normalizeInviteEmail()`で小文字に正規化してから入れる。
+  email String
+  role  HouseholdRole @default(MEMBER)
+
+  /// 招待リンクのトークンのSHA-256（16進64文字）。家庭をまたいで一意。
+  tokenHash String @db.Char(64)
+
+  expiresAt DateTime
+  /// 受け入れ済み・取り消し済みの記録。どちらもnullで期限内なら「保留中」。
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  /// 招待した利用者。**家庭ではなく利用者への参照**なので単一列の外部キーでよい
+  /// （`HouseholdMember.userId`と同じ扱い）。退会しても招待の行は残す。
+  invitedByUserId String?
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  invitedBy User?     @relation(fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// トークンから招待を引くときの唯一のキー。
+  @@unique([tokenHash])
+  /// 家庭に属する他のモデルと同じ形にしておく（子から`[householdId, id]`で参照できるように）。
+  @@unique([householdId, id])
+  @@index([householdId, email])
+  @@index([invitedByUserId])
 }
 
 // ===========================================================================

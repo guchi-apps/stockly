@@ -4,6 +4,11 @@ import type { MetadataRoute } from "next";
 // 初期スコープ外のため持たない（#1）。
 export default function manifest(): MetadataRoute.Manifest {
   return {
+    // `id`と`scope`を明示しておく（#12）。`id`が無いと、`start_url`を変えたときにOSが
+    // 別アプリとみなしてホーム画面のアイコンが二重になる。`scope`の外へ出たリンクは
+    // ブラウザで開かれるので、アプリの範囲を`/`で閉じておく。
+    id: "/",
+    scope: "/",
     name: "Stockly",
     short_name: "Stockly",
     description: "食材・飲料・日用品・防災用品を一元管理する家庭在庫アプリ",
