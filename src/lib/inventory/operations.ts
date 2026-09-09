@@ -152,10 +152,27 @@ export function parseRecordableType(
   return found;
 }
 
-/** `YYYY-MM-DD`をUTCの0時として読む。時差でカレンダー上の日付がずれないようにする。 */
+/**
+ * `YYYY-MM-DD`をUTCの0時として読む。時差でカレンダー上の日付がずれないようにする。
+ *
+ * `YYYY-MM`（年月のみ）も受け付け、その場合は**その月の最終日**を返す（#55）。飲料など
+ * パッケージに年月表記しかない商品向けに、`<input type="month">`から送られてくる値を読む。
+ */
 export function parseDate(raw: string | undefined | null, field: string): Date | null {
   const value = (raw ?? "").trim();
   if (value === "") return null;
+
+  const monthOnlyMatch = /^(\d{4})-(\d{2})$/.exec(value);
+  if (monthOnlyMatch) {
+    const [, year, month] = monthOnlyMatch;
+    const monthNumber = Number(month);
+    if (monthNumber < 1 || monthNumber > 12) {
+      throw new InventoryInputError(field, "存在しない年月です。");
+    }
+    // `Date.UTC`の月は0始まりのため、`monthNumber`をそのまま渡すと翌月扱いになり、
+    // 日を0にすることでその前日＝指定した月の最終日が返る。
+    return new Date(Date.UTC(Number(year), monthNumber, 0));
+  }
 
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) {
