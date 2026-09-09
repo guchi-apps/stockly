@@ -9,6 +9,7 @@ import {
   Menu,
   ScanLine,
   ShoppingCart,
+  Users,
 } from "lucide-react";
 
 /**
@@ -96,6 +97,13 @@ export const ITEMS = [
     icon: MapPin,
     matches: ["/storage"],
     note: "冷蔵庫・食品棚・防災バッグ",
+  },
+  {
+    href: "/household",
+    label: "家庭",
+    icon: Users,
+    matches: ["/household"],
+    note: "メンバーの招待と権限",
   },
 ] as const;
 

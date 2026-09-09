@@ -15,8 +15,10 @@ export function PageHeader({
   description?: ReactNode;
   actions?: ReactNode;
 }) {
+  // `top`が変数なのは、同期・オフラインの帯（`connection-status.tsx`）が出ているあいだ、
+  // その高さぶん下へずらして貼り付くようにするため（#12）。帯が無いときは0で従来どおり。
   return (
-    <header className="bg-background/95 sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3 backdrop-blur md:px-6">
+    <header className="bg-background/95 sticky top-[var(--app-banner-h,0px)] z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3 backdrop-blur md:px-6">
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
         {description ? (

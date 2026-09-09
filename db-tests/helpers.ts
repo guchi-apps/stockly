@@ -124,3 +124,20 @@ export function isForeignKeyViolation(error: unknown): boolean {
 export function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
+
+/**
+ * 利用者を作る（#12の共有まわりのテスト用）。
+ *
+ * `User`は家庭に属さないため`deleteHousehold()`では消えない。作ったテストが
+ * `deleteUser()`で後始末する（残すと`supabaseUserId`の一意制約で次回が落ちる）。
+ */
+export function createUser(supabaseUserId: string, email: string | null = null) {
+  return prisma.user.create({
+    data: { supabaseUserId, email, name: supabaseUserId },
+  });
+}
+
+/** 家庭をすべて消したあとに呼ぶ。所属の行は`onDelete: Cascade`で一緒に消える。 */
+export async function deleteUser(id: string): Promise<void> {
+  await prisma.user.delete({ where: { id } });
+}

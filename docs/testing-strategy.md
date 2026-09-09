@@ -40,7 +40,7 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 | 補充・Notion連携（#6） | unit: 不足量の算出、再送でNotion側が重複しないidempotencyキーの組み立て。**Notion APIへは接続しない**（クライアントを差し替えられる形にし、送信内容の組み立てを純関数で検証する） | 接続失敗時に在庫更新をロールバックせず再送可能な状態を残すことの検証 | #6 |
 | バーコード・商品マスタ（#9） | unit: コードの正規化と重複検知、確定済みルール > バーコード > AI候補の優先順位 | db: `Barcode`の`@@unique([householdId, code])` | #9 |
 | AI候補（#10, #11） | unit: 候補の信頼度の閾値と「自動確定しない」こと、確定前後の状態遷移（`intake/candidates.test.ts`）、モデル出力の検証（`intake/extraction.test.ts`）、費用の概算と資格情報の読み取り（`intake/config.test.ts`）。**モデルAPIへは接続しない**（`ANTHROPIC_BASE_URL`をローカルのスタブへ向けて流す）。画像を扱う場合は§3の「画像アップロード制約」を満たすテスト（`intake/image.test.ts`）。db: 新しいモデルの越境INSERTと、同じ画像を2回取り込めないこと（`db-tests/intake-boundary.test.ts`） | — | #10, #11 |
-| 権限・共有（#12） | unit: OWNERだけができる操作をMEMBERが呼べないこと。db: `HouseholdMember`の`@@unique([householdId, userId])` | 招待の受け入れで他家庭へ所属しないこと | #12 |
+| 権限・共有（#12） | unit: OWNERだけができる操作をMEMBERが呼べないこと、最後のオーナー・最後のひとりが抜けられないこと、招待の状態と宛先の判定（`members.test.ts`）。db: `HouseholdMember`の`@@unique([householdId, userId])`、外れた印が入っていても行が残ること、招待の一意なトークンハッシュ（`household-members.test.ts`） | 招待の受け入れで他家庭へ所属しないこと | #12 |
 
 **PR本文に書くこと**: 追加・変更したテストの一覧（ファイル名）と、自動テストで確かめられなかった挙動を
 どう手で確認したか（開発サーバーのURLと手順）。
@@ -54,7 +54,9 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 | --- | --- | --- | --- |
 | 家庭の越境（他家庭の在庫を読む・書く） | アプリ: `scopeToHousehold()`（`src/lib/household/access.ts`）。在庫の読み書きは`service.ts`・`queries.ts`だけが行い、その`householdId`だけをwhereに使う。DB: 全モデルの`[householdId, 親Id]`複合外部キー | unit: `access.test.ts`。db: `household-boundary.test.ts`（StockLot・InventoryTransactionの越境INSERTが弾かれる） | 担保あり |
 | IDOR（URLやフォームのidを他家庭のものに差し替える） | 画面から渡るid（lotId・transactionId・storageLocationId）は必ず`{ id, householdId }`の組で引く（`service.ts`の`loadLotForUpdate()`等）。見つからなければ`InventoryNotFoundError` | 上と同じ。加えて、新しい画面で`db.<model>.findUnique({ where: { id } })`のように`householdId`無しで引いていないことをレビューで見る | 担保あり |
-| 権限変更（OWNER/MEMBER） | 役割はスキーマにあるが、役割で分ける操作はまだ無い（所属の有無だけで判定） | なし（#12が、役割で分ける操作を足すときにunitテストを同梱する） | #12で実装 |
+| 権限変更（OWNER/MEMBER） | 家庭を変える操作（招待・除名・役割の変更・家庭名の変更）は`service.ts`の`scopeAsOwner()`が`assertCanManageMembers()`でOWNERを要求する。画面の出し分けは担保にしない | unit: `members.test.ts`。手動: MEMBERとしてログインし、`$ACTION_ID_`を直接POSTしても`この操作はオーナーだけが行えます`で拒否される（#12のPRに手順） | 担保あり |
+| 除名・脱退後のアクセス | `HouseholdMember.removedAt`が入った行は`store.ts`の2つのクエリが`removedAt: null`で除外する。所属を引くクエリはここだけ | unit: `access.test.ts`（所属が無ければ拒否）。db: `household-members.test.ts`（外れた印が入っていても行が残る＝復帰はINSERTではなく更新）。手動: 印を入れた直後にその家庭が画面から消えることを確認（#12） | 担保あり |
+| 招待リンクの悪用 | トークンは32バイトの乱数で、DBにはSHA-256だけを保存。受け入れは宛先メール一致・期限7日・取り消しの3つで絞る（`checkInvitationAcceptable()`） | unit: `members.test.ts`（宛先違い・期限切れ・取り消し済み・使用済みを別の理由で断る）。手動: 4状態それぞれの画面を確認（#12） | 担保あり |
 | 入力検証 | Server Actionは`operations.ts`の`parse*()`を通してからserviceを呼ぶ。数量は`Prisma.Decimal`・桁数はDBの`Decimal(14,3)`に合わせて拒否、日付は存在確認、操作IDは形式確認 | unit: `operations.test.ts` | 担保あり |
 | CSRF | Server ActionはNext.jsが`Origin`と`Host`の一致を検証する（不一致は拒否）。Route Handlerの`POST`は`/api/dev/login`（本番404）と`/auth/signout`（ログアウトのみ）。セッションCookieは`SameSite=Lax` | smoke: 本番起動で`/api/dev/login`が404。Route HandlerでPOSTを足すときは、状態を変えるものをServer Actionへ寄せるか、Originの検証を足してPR本文に書く | 担保あり（Route Handler追加時に再確認） |
 | rate limit | なし。ログインはSupabase Authのレート制限に依存。アプリ側のServer Action・APIには無い | なし | 別Issueで対応（起点 #13）。少なくとも認証まわりの公開パス（`/auth/*`、将来のAPI）を対象にする |

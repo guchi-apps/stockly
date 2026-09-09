@@ -48,7 +48,9 @@ src/app/(app)/  在庫・期限・履歴・補充・防災・保管場所・メ�
 src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
 src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
-src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す
+src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す。
+                   共有（#12）は members（役割・招待の純関数）・service（招待/除名/役割変更）・
+                   queries（メンバー一覧）。所属を引くのは store.ts の2つのクエリだけ
 src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations・expiry）と、DBを触るservice・queries・settings
 src/lib/replenishment/ 補充ドメイン（#6）。不足量の算出（shortage）・入力の読み取り（rules）と、service・queries
 src/lib/disaster/ 防災ドメイン（#7・#8）。区分と必要量の定義（rules）・判定（assess）と、queries・settings。
@@ -93,6 +95,12 @@ pnpm build:ci
 `test:unit`はNode標準の`node --test`で`src/**/*.test.ts`を実行する（テストランナーの依存は入れていない）。
 テストからの相対importは`./access.ts`のように拡張子を付ける（Nodeが拡張子付きしか解決しないため。
 tsconfigの`allowImportingTsExtensions`はこのために有効にしている）。DB・外部サービスには接続しない。
+**クライアントコンポーネントで`useEffect`の中から同期的に`setState`を呼ばない**（#12）。
+eslintの`react-hooks/set-state-in-effect`がエラーにする。propの変化に合わせて状態を捨てたいときは
+**描画中に前回の値と突き合わせて捨てる**（`ConnectionStatus`）、作り直したいときは`key`を付ける
+（`IssuedLink`）、`window`が要る値は`typeof window === "undefined"`で分岐して描画中に組む。
+`useEffect`に残してよいのは外部システムの購読と後片付けだけ。
+
 **Nodeの実行はstrip-onlyモードなので、型注釈以外のTS構文（`enum`・`namespace`・パラメータプロパティ）は
 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`で落ちる。** テスト・`prisma/seed.ts`と、そこから読まれるモジュールでは
 `enum`を使わず、union型か`as const`オブジェクトで書く。
@@ -147,6 +155,14 @@ JSを読まない`curl`でも、Next.jsがフォームへ埋める`$ACTION_ID_�
 200で返るだけ**なので、成功したように見えて何も起きない。`curl -F "$ACTION_ID_…=" -F "<欄>=<値>"`とし、
 `Location`ヘッダーの`?notice=`／`?error=`で結果を見る（サーバーコンポーネントのフォームだけ。
 `useActionState`を使うクライアント側のフォームはHTMLにIDが出ないので、この手では叩けない）。
+
+**画面に出ていないServer Actionも、`$ACTION_ID_`を本文に入れれば叩ける**（#12）。権限で
+ボタンを隠している操作（オーナー専用など）を「隠しているだけでなくサーバーが拒否すること」まで
+確かめたいとき、HTMLには`$ACTION_ID_…`が出ない。idは`.next/dev/server/server-reference-manifest.json`の
+`node`の各キー（`workers`にそのページ名が入っている）から拾い、`curl -F '$ACTION_ID_<id>=' -F '<欄>=<値>'`で
+送れば実行される。**このとき`Next-Action: <id>`ヘッダーは使わない**——FormDataを1引数で受ける
+Server Actionには`Connection closed.`の500が返るだけで、拒否されたのかどうかが読めない
+（ヘッダー方式が要るのは`useActionState`のアクションだけ）。
 
 **`useActionState`のフォームをcurlで叩くときは、フォームの欄を`0`より前に置く**（#8）。
 サーバーコンポーネントのフォームと違い`$ACTION_ID_…`はHTMLに出ないので、`Next-Action:<id>`
@@ -439,6 +455,44 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   防災は読むための集計画面で毎日押すものではないので`/menu`側に置く
 - **現在地は「前方一致の長いもの」で選ぶ。** `/inventory/scan`は`/inventory`の下にあるため、
   単純な先頭一致だと読取の画面で「在庫」が光る（`nav-items.ts`の`matches`）
+
+## 家庭内共有・同期・オフライン（#12）
+
+**データの境界と役割は別物。** どの家庭を見られるかは所属の有無だけで決まり（`access.ts`）、
+`HouseholdRole`が決めるのは**家庭そのものを変える操作**——招待・除名・役割の変更・家庭名の変更——を
+OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純関数）に閉じ、
+`service.ts`の`scopeAsOwner()`が必ず通す。**画面がボタンを出さないことは担保にならない**
+（`$ACTION_ID_`を直接POSTすればフォームは誰でも送れる）。
+
+- **除名・脱退で`HouseholdMember`の行を消さない。`removedAt`を入れる。** 入出庫履歴が
+  `[householdId, memberId]`でこの行を記録者として参照しており（`onDelete: Restrict`）、消すと
+  履歴から「誰が記録したか」が失われるうえ、履歴を持つ人はDBが消させてくれない。
+  **所属を引くクエリは`store.ts`の2本だけで、そこで必ず`removedAt: null`を入れる**——
+  ここを緩めると外した人が在庫へ戻る。招待され直したときは行を作らず`removedAt`を消して復帰する
+  （`@@unique([householdId, userId])`があるのでINSERTし直せない）
+- **最後のオーナーと最後のひとりは抜けられない**（`describeLeaveBlock()`）。画面もサーバーも
+  この1つの関数を呼ぶ。判定を画面側にも書くと、ボタンは出るのに押すと断られる状態になる
+- **招待はリンクを発行して手渡し**（メール送信の仕組みがまだ無いため）。リンクを知っていれば
+  誰でも開けるので、宛先メールの一致・期限7日・取り消しの3つで絞る（`checkInvitationAcceptable()`）。
+  **平文のトークンはDBに残さない**（保存するのはSHA-256だけ）。そのため発行直後の1回しか
+  画面に出せず、`useActionState`の戻り値で渡している——**リダイレクトのクエリに載せない**
+  （ブラウザの履歴とアクセスログにリンクが残る）
+- **どの家庭を見ているかはCookie（`stockly-household`）で持ち越す**（`active-household.ts`）。
+  既定は「いちばん古い所属」なので、これが無いと**招待されて参加しても自分の家庭が出たまま**になり、
+  招待できても在庫を共有できない。受け入れた直後にその家庭へ切り替え、`/household`に切替の導線を置く。
+  **Cookieの値は担保ではない**——`resolveActiveHouseholdId()`が所属しているidかを確かめ、
+  在庫のクエリは`scopeToHousehold()`でもう一度確かめる（書き換えても他家庭は開かない）
+- **同期はWebSocketでもSSEでもなく30秒ポーリング**（`/api/inventory/revision`）。返すのは
+  `件数:最終更新時刻`の文字列だけで、在庫の中身は返さない。**比較の基準はサーバーが描いた版を
+  毎回propで渡す**（`ConnectionStatus`）——クライアントに基準を持たせると、自分で記録した直後にも
+  「ほかの端末で更新されました」が出続ける。SSEを選ばなかったのは、PM2の単一プロセスで常時接続を
+  抱えることになり、デプロイのたびに全接続が切れるため。Supabase Realtimeは正本がMariaDBなので使えない
+- **オフラインでは`SubmitButton`が押せなくなる**（`useOnlineStatus()`）。送信を溜めて後から流す
+  仕組みは持たない——「送れたことにして消える」のがいちばん困るため（受入条件）
+- **`env(safe-area-inset-*)`は`viewport-fit=cover`が無いと常に0**（`src/app/layout.tsx`）。
+  下タブの`pb-[env(safe-area-inset-bottom)]`は、この1行が入るまで効いていなかった。
+  帯（`ConnectionStatus`）を出しているあいだは`--app-banner-h`が立ち、`PageHeader`の
+  `sticky top-[var(--app-banner-h,0px)]`がそのぶん下がる
 
 ## 期限と通知
 

@@ -2,20 +2,30 @@ import Link from "next/link";
 import { Boxes } from "lucide-react";
 
 import { BottomNav, SideNav } from "@/components/inventory/app-nav";
+import { ConnectionStatus } from "@/components/inventory/connection-status";
 import { Button } from "@/components/ui/button";
 import { requireInventoryContext } from "@/lib/inventory/context";
+import { getInventoryRevision } from "@/lib/inventory/queries";
+import { formatTokyoDateTime } from "@/lib/time/tokyo";
 
 /**
  * 在庫まわりの画面の外枠。
  *
  * 幅768px以上では左に縦のナビ、それ未満では画面下のタブを出す。スマホでは下タブのぶんだけ
  * 本文の下に余白を置き、最後の行がタブに隠れないようにする。
+ *
+ * 左右の`env(safe-area-inset-*)`は、iPhoneを横向きにしたときにノッチ側へ本文が
+ * 潜り込まないようにするため（#12。効かせるには`viewport-fit=cover`が要る＝`app/layout.tsx`）。
  */
 export default async function InventoryLayout({ children }: LayoutProps<"/">) {
-  const { userName, householdName } = await requireInventoryContext();
+  const { ctx, userName, householdName } = await requireInventoryContext();
+
+  // 端末をまたいだ同期の基準（#12）。画面が描かれるたびに最新へ揃うので、
+  // 自分で記録した直後に「ほかの端末で更新されました」が出ることはない。
+  const revision = ctx ? await getInventoryRevision(ctx) : null;
 
   return (
-    <div className="flex min-h-full flex-1 flex-col md:flex-row">
+    <div className="flex min-h-full flex-1 flex-col pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] md:flex-row">
       <aside className="bg-muted/40 hidden w-56 shrink-0 flex-col gap-6 border-r p-4 md:flex">
         <Link href="/inventory" className="flex items-center gap-2 px-1">
           <span className="bg-primary text-primary-foreground grid size-7 place-items-center rounded-lg">
@@ -37,7 +47,10 @@ export default async function InventoryLayout({ children }: LayoutProps<"/">) {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col pb-20 md:pb-0">{children}</div>
+      <div className="flex min-w-0 flex-1 flex-col pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-0">
+        <ConnectionStatus revision={revision} loadedAt={formatTokyoDateTime(new Date())} />
+        {children}
+      </div>
 
       <BottomNav />
     </div>
