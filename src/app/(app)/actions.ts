@@ -202,6 +202,7 @@ export async function updateStockLotAction(
       productName: parsed.value.productName,
       categoryName: parsed.value.categoryName,
       amount: parsed.value.amount,
+      unit: parsed.value.unit,
       storageLocationId: parsed.value.storageLocationId,
       storagePositionId: parsed.value.storagePositionId,
       expiryKind: parsed.value.expiryKind,

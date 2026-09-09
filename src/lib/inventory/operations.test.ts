@@ -5,6 +5,7 @@ import {
   InventoryInputError,
   applyRecordToLot,
   canReverse,
+  convertLotUnit,
   formatQuantityWithUnit,
   nextLotStatus,
   parseAmount,
@@ -16,6 +17,7 @@ import {
   parseStockLotForm,
   parseStorageLocationForm,
   resolveExpiry,
+  resolveUnitChangeAdjustment,
   signedDelta,
 } from "./operations.ts";
 import { Decimal, quantity } from "./units.ts";
@@ -167,6 +169,87 @@ describe("applyRecordToLot", () => {
     });
 
     assert.equal(next.amount.toString(), "1000");
+  });
+});
+
+describe("convertLotUnit", () => {
+  it("換算できる単位（kg→g）へ数量を換算する", () => {
+    const converted = convertLotUnit(quantity("1.5", "KILOGRAM"), "GRAM");
+
+    assert.equal(converted.amount.toString(), "1500");
+    assert.equal(converted.unit, "GRAM");
+  });
+
+  it("同じ単位を指定すると数量はそのまま", () => {
+    const converted = convertLotUnit(quantity("3", "PIECE"), "PIECE");
+
+    assert.equal(converted.amount.toString(), "3");
+  });
+
+  it("換算できない単位（個数系どうし）への変更を拒否する", () => {
+    assert.throws(
+      () => convertLotUnit(quantity("3", "PIECE"), "PACK"),
+      /変更できません/,
+    );
+  });
+
+  it("換算できない単位（次元が違う）への変更を拒否する", () => {
+    assert.throws(
+      () => convertLotUnit(quantity("500", "GRAM"), "MILLILITER"),
+      /変更できません/,
+    );
+  });
+});
+
+describe("resolveUnitChangeAdjustment", () => {
+  it("単位が同じで数量も同じなら訂正なし（null）", () => {
+    const adjustment = resolveUnitChangeAdjustment(
+      quantity("3", "PIECE"),
+      "PIECE",
+      new Decimal("3"),
+    );
+
+    assert.equal(adjustment, null);
+  });
+
+  it("単位を変えても入力値が換算後と一致すれば訂正なし", () => {
+    const adjustment = resolveUnitChangeAdjustment(
+      quantity("1.5", "KILOGRAM"),
+      "GRAM",
+      new Decimal("1500"),
+    );
+
+    assert.equal(adjustment, null);
+  });
+
+  it("登録ミスの訂正: kgのつもりでgとして登録した数量をgへ直す", () => {
+    // 現在庫は「1.5」だが単位はKILOGRAM（誤登録）。gへ直し、数量欄は1.5のまま
+    // （数字自体は正しいという前提）。現在庫をgへ換算すると1500gなので、
+    // 差分は 1.5 - 1500 = -1498.5g がADJUSTとして残る。
+    const adjustment = resolveUnitChangeAdjustment(
+      quantity("1.5", "KILOGRAM"),
+      "GRAM",
+      new Decimal("1.5"),
+    );
+
+    assert.ok(adjustment !== null);
+    assert.equal(adjustment.toString(), "-1498.5");
+  });
+
+  it("換算後の数量が小数3桁に収まらない場合は拒否する（丸めて通さない）", () => {
+    // 123.456g → kgへ換算すると0.123456kgになり、小数第3位までのDB列に収まらない。
+    assert.throws(
+      () =>
+        resolveUnitChangeAdjustment(quantity("123.456", "GRAM"), "KILOGRAM", new Decimal("0.123")),
+      /収まりません/,
+    );
+  });
+
+  it("換算できない単位を渡すとconvertLotUnitと同じ理由で拒否する", () => {
+    assert.throws(
+      () => resolveUnitChangeAdjustment(quantity("1", "PIECE"), "PACK", new Decimal("1")),
+      /変更できません/,
+    );
   });
 });
 
