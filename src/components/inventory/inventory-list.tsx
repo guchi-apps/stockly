@@ -112,7 +112,7 @@ export async function InventoryList({
                       variant="outline"
                       className="border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300"
                     >
-                      開封済み
+                      使用中
                     </Badge>
                   ) : null}
                   <span className="flex-1" />

@@ -378,6 +378,31 @@ export interface CreateStockLotParams extends StockLotFormValue {
 }
 
 /**
+ * 使用中のロットを、商品につき常に高々1つに保つ。
+ *
+ * 「使用中」はロットごとに独立したフィールド（`openedAt`）だが、実際に使っているのは
+ * 同じ商品の中でも基本的に1つだけなので、新しく使用中にしたロット以外の使用中は
+ * 同じトランザクションの中で自動的に解除する。
+ */
+async function closeOtherOpenLots(
+  tx: Prisma.TransactionClient,
+  householdId: string,
+  productId: string,
+  excludeLotId: string,
+): Promise<void> {
+  await tx.stockLot.updateMany({
+    where: {
+      householdId,
+      productId,
+      id: { not: excludeLotId },
+      status: "ACTIVE",
+      openedAt: { not: null },
+    },
+    data: { openedAt: null },
+  });
+}
+
+/**
  * 在庫を1件登録する。商品・カテゴリが未登録なら名前で作る。
  *
  * 登録は「購入」1件として履歴に残す。数量だけが先にあって履歴が無い在庫を作らないため。
@@ -415,6 +440,10 @@ export async function createStockLot(
         },
         select: { id: true },
       });
+
+      if (params.opened) {
+        await closeOtherOpenLots(tx, householdId, productId, lot.id);
+      }
 
       await tx.inventoryTransaction.create({
         data: {
@@ -558,6 +587,10 @@ export async function updateStockLot(
           note: params.note,
         },
       });
+
+      if (params.opened) {
+        await closeOtherOpenLots(tx, householdId, lot.productId, lot.id);
+      }
 
       // 編集で直した値も「前回の確定」として覚え直す。登録のときだけ覚えると、
       // 「登録してすぐ直した」場合に古いほうが候補として残り続ける。

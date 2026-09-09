@@ -93,7 +93,7 @@ export const EXCLUSION_REASON_LABELS: Readonly<Record<DisasterExclusionReason, s
   UNKNOWN_EXPIRY: "期限が要確認",
   CHILLED: "冷蔵",
   FROZEN: "冷凍",
-  OPENED: "開封済み",
+  OPENED: "使用中",
   NO_HEAT_SOURCE: "熱源がない",
   NO_WATER: "水がない",
   UNCONVERTIBLE: "換算できない",
