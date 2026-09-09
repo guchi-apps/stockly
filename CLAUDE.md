@@ -539,6 +539,11 @@ OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純
   画面から呼ぶ読み取り（`inbox.ts`）は`scopeToHousehold()`を通す通常の画面用モジュール
 - 送り先は`STOCKLY_NOTIFY_CHANNELS`（既定は`IN_APP`）。メール・LINE等の外部サービスは未実装で、
   追加にはユーザー確認が要る。**定期実行（cron）の登録はVPS側の手作業**で、このリポジトリには入っていない
+  （crontabの実体は`guchi-apps/vps`の`cron/crontab.txt`。変更はそちらへIssueを立てる。#43）
+- **`run-expiry-notifications.ts`は`.env`（本番）・`.env.local`（開発）のどちらでも動くよう、
+  dotenvへ配列で両方渡している。** cronはPM2を介さず`node`を直接起動するため、Next.js本体と違って
+  `.env`が自動では読まれない。`.env.local`だけを対象にしていた時期は、本番で`cd <配置先> &&
+  pnpm job:expiry`を実行すると`DATABASE_URL`が見つからず落ちていた（#43で確認・修正）
 
 ## 認証と家庭の境界
 
