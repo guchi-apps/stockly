@@ -158,26 +158,39 @@ export interface MonthlyUsage {
 }
 
 /**
- * 今月の使用量。**専用のテーブルは持たず、取り込みの記録を数えて出す**
+ * 今月の使用量。**専用のテーブルは持たず、AIへ送った記録を数えて出す**
  * （集計で出せるものを別に保存すると必ずずれる。防災の判定を保存しないのと同じ考え方）。
  *
  * 失敗した取り込みも数える。送ってしまったぶんは課金されるため。
+ *
+ * **写真取込（#10）と写真からの減算候補（#11）を合算する。** どちらも同じAIへ同じ資格情報で
+ * 送るので、上限を機能ごとに分けると片方だけ設定して安心する形になる。
+ * **AIへ写真を送る機能を足したら、ここにも足すこと**（足し忘れると、その機能だけが上限の外で動く）。
  */
 export async function readMonthlyUsage(
   householdId: string,
   now: Date = new Date(),
 ): Promise<MonthlyUsage> {
   const { start, end } = tokyoMonthRange(now);
+  const period = { householdId, createdAt: { gte: start, lt: end } };
 
-  const result = await db.intakeBatch.aggregate({
-    where: { householdId, createdAt: { gte: start, lt: end } },
-    _count: { _all: true },
-    _sum: { estimatedCostYen: true },
-  });
+  const [batches, scans] = await Promise.all([
+    db.intakeBatch.aggregate({
+      where: period,
+      _count: { _all: true },
+      _sum: { estimatedCostYen: true },
+    }),
+    db.consumptionScan.aggregate({
+      where: period,
+      _count: { _all: true },
+      _sum: { estimatedCostYen: true },
+    }),
+  ]);
 
   return {
-    requestCount: result._count._all,
-    costYen: Number(result._sum.estimatedCostYen ?? 0),
+    requestCount: batches._count._all + scans._count._all,
+    costYen:
+      Number(batches._sum.estimatedCostYen ?? 0) + Number(scans._sum.estimatedCostYen ?? 0),
     from: start,
     to: end,
   };

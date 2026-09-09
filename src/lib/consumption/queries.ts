@@ -7,10 +7,14 @@
 import { db } from "@/lib/db";
 import { scopeToHousehold } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
+import {
+  INTAKE_CREDENTIAL_ENV_KEYS,
+  MAX_IMAGES_PER_BATCH,
+  readIntakeConfig,
+} from "@/lib/intake/config";
+import { readMonthlyUsage, type MonthlyUsage } from "@/lib/intake/queries";
+import { readIntakeSettings } from "@/lib/intake/settings";
 import type { InventoryContext } from "@/lib/inventory/service";
-import { missingVisionConfigKeys, readVisionConfig, VISION_LIMITS } from "@/lib/vision/config";
-
-import { countScansToday } from "./service.ts";
 
 async function scope(ctx: InventoryContext): Promise<string> {
   const { householdId } = await scopeToHousehold(
@@ -21,31 +25,44 @@ async function scope(ctx: InventoryContext): Promise<string> {
   return householdId;
 }
 
-/** 候補と一緒に画面へ出す、その家庭の状況。 */
+/**
+ * 候補と一緒に画面へ出す、その家庭の状況。
+ *
+ * 資格情報も費用の上限も**写真取込（#10）と共通**なので、ここでは`src/lib/intake/`の
+ * 設定をそのまま読む（上限を機能ごとに分けない）。
+ */
 export interface ConsumptionScanContext {
-  /** 解析を実行できるか。設定が無ければ画面は開くが、送信だけができない。 */
+  /** 読み取りを実行できるか。設定が無ければ画面は開くが、送信だけができない。 */
   readonly configured: boolean;
   /** 未設定の環境変数名。値そのものは出さない。 */
   readonly missingKeys: readonly string[];
-  readonly dailyLimit: number;
-  readonly usedToday: number;
+  /** 今月の使用量と、設定されている上限（0は「上限なし」）。 */
+  readonly usage: MonthlyUsage;
+  readonly monthlyRequestLimit: number;
+  readonly monthlyCostLimitYen: number;
+  readonly stopOnLimit: boolean;
   readonly maxImages: number;
-  readonly maxImageBytes: number;
 }
 
 export async function getConsumptionScanContext(
   ctx: InventoryContext,
 ): Promise<ConsumptionScanContext> {
   const householdId = await scope(ctx);
-  const config = readVisionConfig();
+  const config = readIntakeConfig();
+  const [settings, usage] = await Promise.all([
+    readIntakeSettings(householdId),
+    readMonthlyUsage(householdId),
+  ]);
 
   return {
     configured: config !== null,
-    missingKeys: missingVisionConfigKeys(),
-    dailyLimit: config?.dailyLimit ?? VISION_LIMITS.dailyLimit,
-    usedToday: await countScansToday(householdId),
-    maxImages: config?.maxImages ?? VISION_LIMITS.maxImages,
-    maxImageBytes: config?.maxImageBytes ?? VISION_LIMITS.maxImageBytes,
+    // どちらか1つあればよいので、両方欠けているときだけ「未設定」として並べる。
+    missingKeys: config === null ? [...INTAKE_CREDENTIAL_ENV_KEYS] : [],
+    usage,
+    monthlyRequestLimit: settings.monthlyRequestLimit,
+    monthlyCostLimitYen: settings.monthlyCostLimitYen,
+    stopOnLimit: settings.stopOnLimit,
+    maxImages: MAX_IMAGES_PER_BATCH,
   };
 }
 

@@ -9,29 +9,39 @@
  * 在庫の数量を動かすのは既存の`src/lib/inventory/service.ts`の`recordTransaction()`で、
  * ここに独自の書き込みは持たない。だから確定した候補は**ふつうの消費履歴**になり、
  * 履歴画面からそのまま取り消せる（受入条件）。
+ *
+ * **AIの設定・資格情報・費用の上限は`src/lib/intake/`（#10）と共通のものを使う。**
+ * 上限を機能ごとに分けると、片方だけ設定して安心する形になるため。
  */
 import { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { scopeToHousehold } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
+import { readIntakeConfig } from "@/lib/intake/config";
+import { readMonthlyUsage } from "@/lib/intake/queries";
+import { readIntakeSettings, resolveModel, type IntakeSettings } from "@/lib/intake/settings";
 import { InventoryInputError } from "@/lib/inventory/operations";
 import {
+  InventoryConflictError,
   InventoryNotFoundError,
   recordTransaction,
   type InventoryContext,
   type RecordStatus,
 } from "@/lib/inventory/service";
 import { Decimal } from "@/lib/inventory/units";
-import { readVisionConfig } from "@/lib/vision/config";
-import { assertImageCount, fingerprintImages, prepareImage } from "@/lib/vision/image";
-import { VisionRequestError, readObservations } from "@/lib/vision/client";
 
+import {
+  ObservationRequestError,
+  ObservationResponseError,
+  requestObservations,
+  type ObservationUsage,
+} from "./client.ts";
+import { fingerprintImages, prepareImages } from "./images.ts";
 import { isConsumptionScanKind, type ConsumptionScanKind } from "./kinds.ts";
 import {
   CONSUMPTION_RULE_VERSION,
   buildConsumptionCandidates,
-  promptFor,
   type MatchableLot,
 } from "./matching.ts";
 
@@ -52,9 +62,8 @@ export function parseScanKind(raw: string | undefined | null): ConsumptionScanKi
 
 export interface AnalyzeResult {
   readonly scanId: string;
-  /** 解析そのものが失敗したか。失敗の理由は`ConsumptionScan.error`に残してある。 */
+  /** 解析そのものが失敗したか。失敗の理由は`ConsumptionScan.error`にも残してある。 */
   readonly failed: boolean;
-  /** 失敗したときに画面へ出す理由。 */
   readonly error: string | null;
   /** 同じ写真を送り直したときは`true`。前回の候補をそのまま出す（受入条件の「画像再送」）。 */
   readonly reused: boolean;
@@ -74,52 +83,77 @@ export async function analyzeConsumptionPhotos(
 ): Promise<AnalyzeResult> {
   const householdId = await scope(ctx);
 
-  const config = readVisionConfig();
+  const config = readIntakeConfig();
   if (!config) {
     throw new InventoryInputError(
       "form",
-      "写真の解析はまだ設定されていません。在庫から選んで手で減らしてください。",
+      "写真の読み取りはまだ設定されていません。在庫から選んで手で減らしてください。",
     );
   }
 
-  assertImageCount(params.images.length, config.maxImages);
-  const images = params.images.map((bytes, index) =>
-    prepareImage(bytes, { maxBytes: config.maxImageBytes, index }),
-  );
+  const images = prepareImages(params.images);
 
   // 同じ写真の送り直しは、モデルを呼ばずに前回の結果を返す（費用も候補も二重にしない）。
-  const fingerprint = await fingerprintImages(images, params.kind);
+  const fingerprint = fingerprintImages(images, params.kind);
   const existing = await db.consumptionScan.findFirst({
     where: { householdId, imageFingerprint: fingerprint },
-    select: { id: true, _count: { select: { items: true } } },
+    select: { id: true, status: true, error: true },
   });
   if (existing) {
     const counts = await countItems(householdId, existing.id);
-    return { scanId: existing.id, reused: true, failed: false, error: null, ...counts };
+    return {
+      scanId: existing.id,
+      reused: true,
+      failed: existing.status === "FAILED",
+      error: existing.error,
+      ...counts,
+    };
   }
 
-  await assertUnderDailyLimit(householdId, config.dailyLimit);
+  const settings = await readIntakeSettings(householdId);
+  await assertWithinLimits(householdId, settings);
+  const model = resolveModel(settings, config.defaultModel);
 
+  const scan = await db.consumptionScan.create({
+    data: {
+      householdId,
+      kind: params.kind,
+      status: "READY",
+      imageFingerprint: fingerprint,
+      imageCount: images.length,
+      model,
+      ruleVersion: CONSUMPTION_RULE_VERSION,
+    },
+    select: { id: true },
+  });
+
+  // --- ここから外との通信。DBのトランザクションの外で行う ---
   let observations;
-  let model: string;
+  let usage: ObservationUsage;
   try {
-    const result = await readObservations(config, promptFor(params.kind), images);
-    observations = result.observations;
-    model = result.model;
+    const outcome = await requestObservations(
+      config,
+      model,
+      params.kind,
+      images.map((image) => ({
+        mimeType: image.mimeType,
+        base64: Buffer.from(image.bytes).toString("base64"),
+      })),
+    );
+    observations = outcome.observations;
+    usage = outcome;
   } catch (error) {
-    if (!(error instanceof VisionRequestError)) throw error;
-    const scan = await db.consumptionScan.create({
-      data: {
-        householdId,
-        kind: params.kind,
-        status: "FAILED",
-        imageFingerprint: fingerprint,
-        imageCount: images.length,
-        model: config.model,
-        ruleVersion: CONSUMPTION_RULE_VERSION,
-        error: error.message,
-      },
-      select: { id: true },
+    if (
+      !(error instanceof ObservationRequestError) &&
+      !(error instanceof ObservationResponseError)
+    ) {
+      throw error;
+    }
+    // **応答が届いていた失敗では、払ったぶんのトークンも記録する**（#10と同じ約束）。
+    const spent = error instanceof ObservationResponseError ? error.usage : null;
+    await db.consumptionScan.update({
+      where: { id: scan.id },
+      data: { status: "FAILED", error: error.message, ...toUsageColumns(spent) },
     });
     return {
       scanId: scan.id,
@@ -138,25 +172,16 @@ export async function analyzeConsumptionPhotos(
     lots,
   });
 
-  const scan = await db.$transaction(async (tx) => {
-    const created = await tx.consumptionScan.create({
-      data: {
-        householdId,
-        kind: params.kind,
-        status: "READY",
-        imageFingerprint: fingerprint,
-        imageCount: images.length,
-        model,
-        ruleVersion: CONSUMPTION_RULE_VERSION,
-      },
-      select: { id: true },
-    });
-
-    await tx.consumptionScanItem.createMany({
+  await db.$transaction([
+    db.consumptionScan.update({
+      where: { id: scan.id },
+      data: toUsageColumns(usage),
+    }),
+    db.consumptionScanItem.createMany({
       data: [
         ...candidates.map((candidate, index) => ({
           householdId,
-          scanId: created.id,
+          scanId: scan.id,
           productId: candidate.lot.productId,
           stockLotId: candidate.lot.id,
           detectedLabel: candidate.label.slice(0, 200),
@@ -170,7 +195,7 @@ export async function analyzeConsumptionPhotos(
         })),
         ...skipped.map((row, index) => ({
           householdId,
-          scanId: created.id,
+          scanId: scan.id,
           productId: row.productId,
           detectedLabel: row.label.slice(0, 200),
           detectedBarcode: row.detectedBarcode,
@@ -181,10 +206,8 @@ export async function analyzeConsumptionPhotos(
           sortOrder: candidates.length + index,
         })),
       ],
-    });
-
-    return created;
-  });
+    }),
+  ]);
 
   return {
     scanId: scan.id,
@@ -281,6 +304,15 @@ export async function rejectConsumptionCandidate(
 // 材料の読み込みと歯止め
 // ---------------------------------------------------------------------------
 
+function toUsageColumns(usage: ObservationUsage | null) {
+  if (!usage) return {};
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    estimatedCostYen: new Prisma.Decimal(usage.estimatedCostYen),
+  };
+}
+
 /**
  * 照合に使う在庫を集める。
  *
@@ -339,38 +371,27 @@ function earlier(a: Date | null, b: Date | null): Date | null {
 }
 
 /**
- * 1日あたりの解析回数の上限。**費用の歯止めはここだけ。**
+ * 月あたりの上限に達していないか。**#10の写真取込と同じ枠で数える**
+ * （`readMonthlyUsage()`が`IntakeBatch`と`ConsumptionScan`を合算する）。
  *
- * 日付の境目は日本時間で数える（`src/lib/time/tokyo.ts`と同じ約束。UTCで数えると、
- * 朝9時までの解析が前日ぶんとして扱われる）。
+ * 上限に達していても手入力は使えるので、ここで止めるのは写真からの読み取りだけ。
  */
-async function assertUnderDailyLimit(householdId: string, dailyLimit: number): Promise<void> {
-  const used = await countScansToday(householdId);
-  if (used >= dailyLimit) {
-    throw new InventoryInputError(
-      "form",
-      `写真の解析は1日${dailyLimit}回までです（本日はすでに${used}回）。明日また試すか、在庫から選んで手で減らしてください。`,
+async function assertWithinLimits(householdId: string, settings: IntakeSettings): Promise<void> {
+  if (!settings.stopOnLimit) return;
+
+  const usage = await readMonthlyUsage(householdId);
+  if (settings.monthlyRequestLimit > 0 && usage.requestCount >= settings.monthlyRequestLimit) {
+    throw new InventoryConflictError(
+      `今月の読み取り回数が上限（${settings.monthlyRequestLimit}回）に達しました。` +
+        "上限は写真取込の設定から変えられます。在庫から選んで手で減らすことはこのままできます。",
     );
   }
-}
-
-/** 日本時間の今日、その家庭が実行した解析の回数。 */
-export async function countScansToday(householdId: string, now: Date = new Date()): Promise<number> {
-  return db.consumptionScan.count({
-    where: { householdId, createdAt: { gte: startOfTokyoDay(now) } },
-  });
-}
-
-/** 日本時間の0時をUTCの時刻として返す。 */
-function startOfTokyoDay(now: Date): Date {
-  const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-  const shifted = new Date(now.getTime() + JST_OFFSET_MS);
-  const midnight = Date.UTC(
-    shifted.getUTCFullYear(),
-    shifted.getUTCMonth(),
-    shifted.getUTCDate(),
-  );
-  return new Date(midnight - JST_OFFSET_MS);
+  if (settings.monthlyCostLimitYen > 0 && usage.costYen >= settings.monthlyCostLimitYen) {
+    throw new InventoryConflictError(
+      `今月の概算の費用が上限（${settings.monthlyCostLimitYen}円）に達しました。` +
+        "上限は写真取込の設定から変えられます。在庫から選んで手で減らすことはこのままできます。",
+    );
+  }
 }
 
 async function countItems(

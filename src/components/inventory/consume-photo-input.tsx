@@ -24,8 +24,8 @@ import { Button } from "@/components/ui/button";
  */
 
 /**
- * 選べる形式。**サーバーが受け取るのはJPEG・PNG・WebPだけ**（`src/lib/vision/image.ts`の
- * `ACCEPTED_MEDIA_TYPES`）で、HEIC/HEIFはここでJPEGへ変換してから送る。変換できなかった場合は
+ * 選べる形式。**サーバーが受け取るのはJPEG・PNG・WebPだけ**（`src/lib/intake/image.ts`の
+ * `IMAGE_TYPES`）で、HEIC/HEIFはここでJPEGへ変換してから送る。変換できなかった場合は
  * サーバーが理由付きで断る。
  */
 const ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif";

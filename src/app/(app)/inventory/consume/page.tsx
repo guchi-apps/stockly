@@ -63,7 +63,10 @@ export default async function ConsumePhotoPage({
 
   const candidates = scan?.items.filter((item) => item.skipReason === null) ?? [];
   const skipped = scan?.items.filter((item) => item.skipReason !== null) ?? [];
-  const remaining = context.dailyLimit - context.usedToday;
+  const remainingRequests =
+    context.stopOnLimit && context.monthlyRequestLimit > 0
+      ? Math.max(0, context.monthlyRequestLimit - context.usage.requestCount)
+      : null;
 
   return (
     <>
@@ -89,7 +92,11 @@ export default async function ConsumePhotoPage({
         </p>
 
         {context.configured ? (
-          <CaptureForm kind={kind} maxImages={context.maxImages} remaining={remaining} />
+          <CaptureForm
+            kind={kind}
+            maxImages={context.maxImages}
+            remainingRequests={remainingRequests}
+          />
         ) : (
           <NotConfigured missingKeys={context.missingKeys} />
         )}
@@ -104,7 +111,8 @@ export default async function ConsumePhotoPage({
               {scan.model ? <span>{scan.model}</span> : null}
               <span>画像は保存していません</span>
               <span>
-                本日の解析 {context.usedToday} / {context.dailyLimit} 回
+                今月の読み取り {context.usage.requestCount}
+                {context.monthlyRequestLimit > 0 ? ` / ${context.monthlyRequestLimit}` : ""} 回
               </span>
             </p>
 
@@ -156,11 +164,12 @@ export default async function ConsumePhotoPage({
 function CaptureForm({
   kind,
   maxImages,
-  remaining,
+  remainingRequests,
 }: {
   kind: ConsumptionScanKind;
   maxImages: number;
-  remaining: number;
+  /** 今月あと何回読み取れるか。上限を設けていなければ`null`。 */
+  remainingRequests: number | null;
 }) {
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border">
@@ -195,7 +204,9 @@ function CaptureForm({
           <p className="text-muted-foreground text-[11px] leading-relaxed">
             JPEG・PNG・WebP、一度に{maxImages}枚まで。位置情報は送る前に取り除き、画像は保存しません。
             <br />
-            今日はあと{Math.max(0, remaining)}回まで解析できます。
+            {remainingRequests === null
+              ? "読み取りの回数と費用の上限は、写真取込の設定から変えられます。"
+              : `今月はあと${remainingRequests}回まで読み取れます（上限は写真取込の設定から変えられます）。`}
           </p>
         </div>
       </form>
@@ -203,18 +214,25 @@ function CaptureForm({
   );
 }
 
-/** 設定が無いとき。**在庫の他の画面は使えるので、ここだけを止める。** */
+/**
+ * 資格情報が無いとき。**在庫の他の画面は使えるので、ここだけを止める。**
+ *
+ * 資格情報は写真取込（#10）と共通なので、案内も同じものを指す。
+ */
 function NotConfigured({ missingKeys }: { missingKeys: readonly string[] }) {
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-dashed px-4 py-4">
-      <b className="text-sm font-semibold">写真の解析はまだ設定されていません</b>
+      <b className="text-sm font-semibold">写真の読み取りはまだ設定されていません</b>
       <p className="text-muted-foreground text-xs leading-relaxed">
-        {missingKeys.length > 0 ? `未設定: ${missingKeys.join(" ・ ")}。` : ""}
+        {missingKeys.length > 0 ? `${missingKeys.join(" か ")} のどちらかが必要です。` : ""}
         設定が済むまでは、在庫の画面から商品を選んで手で減らしてください。
       </p>
       <div className="flex gap-2">
         <Button asChild variant="outline" size="sm">
           <Link href="/inventory">在庫から選ぶ</Link>
+        </Button>
+        <Button asChild variant="ghost" size="sm">
+          <Link href="/intake/settings">写真取込の設定</Link>
         </Button>
       </div>
     </div>

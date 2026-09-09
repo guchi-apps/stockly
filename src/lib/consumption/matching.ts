@@ -20,7 +20,7 @@ import {
   unitDefinition,
   type UnitCode,
 } from "../inventory/units.ts";
-import type { VisionObservation } from "../vision/client.ts";
+import type { VisionObservation } from "./observations.ts";
 import { SCAN_KIND_DEFINITIONS, type ConsumptionScanKind } from "./kinds.ts";
 
 /**

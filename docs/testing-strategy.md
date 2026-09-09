@@ -40,6 +40,7 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 | 補充・Notion連携（#6） | unit: 不足量の算出、再送でNotion側が重複しないidempotencyキーの組み立て。**Notion APIへは接続しない**（クライアントを差し替えられる形にし、送信内容の組み立てを純関数で検証する） | 接続失敗時に在庫更新をロールバックせず再送可能な状態を残すことの検証 | #6 |
 | バーコード・商品マスタ（#9） | unit: コードの正規化と重複検知、確定済みルール > バーコード > AI候補の優先順位 | db: `Barcode`の`@@unique([householdId, code])` | #9 |
 | AI候補（#10, #11） | unit: 候補の信頼度の閾値と「自動確定しない」こと、確定前後の状態遷移（`intake/candidates.test.ts`）、モデル出力の検証（`intake/extraction.test.ts`）、費用の概算と資格情報の読み取り（`intake/config.test.ts`）。**モデルAPIへは接続しない**（`ANTHROPIC_BASE_URL`をローカルのスタブへ向けて流す）。画像を扱う場合は§3の「画像アップロード制約」を満たすテスト（`intake/image.test.ts`）。db: 新しいモデルの越境INSERTと、同じ画像を2回取り込めないこと（`db-tests/intake-boundary.test.ts`） | — | #10, #11 |
+| 写真からの減算候補（#11） | unit: 商品の照合の優先順位（バーコード > 商品名 > 別名 > 部分一致）、写真の種類ごとの減算量、**在庫に無い商品を候補にしないこと**、決められない量を埋めずに理由を返すこと、同じ入力なら同じ結果になること（`consumption/matching.test.ts`）。モデル応答の検証（`consumption/observations.test.ts`）。枚数・大きさの上限と画像の指紋（`consumption/images.test.ts`）。db: 同じ画像の解析が2件作られないこと・候補が他家庭のロットを指せないこと（`db-tests/consumption-scan.test.ts`） | 照合の規則を変えたら`CONSUMPTION_RULE_VERSION`を上げる（文言や並び順だけの変更では上げない） | #11 |
 | 権限・共有（#12） | unit: OWNERだけができる操作をMEMBERが呼べないこと、最後のオーナー・最後のひとりが抜けられないこと、招待の状態と宛先の判定（`members.test.ts`）。db: `HouseholdMember`の`@@unique([householdId, userId])`、外れた印が入っていても行が残ること、招待の一意なトークンハッシュ（`household-members.test.ts`） | 招待の受け入れで他家庭へ所属しないこと | #12 |
 
 **PR本文に書くこと**: 追加・変更したテストの一覧（ファイル名）と、自動テストで確かめられなかった挙動を
@@ -60,7 +61,8 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 | 入力検証 | Server Actionは`operations.ts`の`parse*()`を通してからserviceを呼ぶ。数量は`Prisma.Decimal`・桁数はDBの`Decimal(14,3)`に合わせて拒否、日付は存在確認、操作IDは形式確認 | unit: `operations.test.ts` | 担保あり |
 | CSRF | Server ActionはNext.jsが`Origin`と`Host`の一致を検証する（不一致は拒否）。Route Handlerの`POST`は`/api/dev/login`（本番404）と`/auth/signout`（ログアウトのみ）。セッションCookieは`SameSite=Lax` | smoke: 本番起動で`/api/dev/login`が404。Route HandlerでPOSTを足すときは、状態を変えるものをServer Actionへ寄せるか、Originの検証を足してPR本文に書く | 担保あり（Route Handler追加時に再確認） |
 | rate limit | なし。ログインはSupabase Authのレート制限に依存。アプリ側のServer Action・APIには無い | なし | 別Issueで対応（起点 #13）。少なくとも認証まわりの公開パス（`/auth/*`、将来のAPI）を対象にする |
-| 画像アップロード制約 | `src/lib/intake/image.ts`が先頭バイトで形式を判定し、EXIF等の付帯情報を落とす。枚数は`intake/actions.ts`、バイト数は`intake/service.ts`が弾く | unit: `intake/image.test.ts`（形式判定の境界・付帯情報の除去）。E2E: 画像でないファイルを`image/jpeg`と名乗って送っても拒否されること | 担保あり（#10） |
+| 画像アップロード制約 | `src/lib/intake/image.ts`が先頭バイトで形式を判定し、EXIF等の付帯情報を落とす。枚数は`intake/actions.ts`、バイト数は`intake/service.ts`が弾く。#11も同じ判定と同じ上限を使い、弾くのは`consumption/images.ts`の`prepareImages()` | unit: `intake/image.test.ts`（形式判定の境界・付帯情報の除去）、`consumption/images.test.ts`（枚数・大きさの境目と「何枚目が駄目か」）。E2E: 画像でないファイルを`image/jpeg`と名乗って送っても拒否されること | 担保あり（#10・#11） |
+| 外部モデルAPIの費用 | 家庭ごとの月あたりの上限（`IntakeSetting`の回数・金額）。**写真取込（#10）と写真からの減算候補（#11）を合算して数える**（`intake/queries.ts`の`readMonthlyUsage()`）。応答が届いた失敗でも払ったトークンを記録する | unit: 費用の概算（`intake/config.test.ts`）。E2E: 上限を1回に下げた家庭で読み取りが断られること、#11の読み取りが`/intake`の「今月の使用」に加算されること | 担保あり（#10・#11）。**AIへ写真を送る機能を足したら`readMonthlyUsage()`にも足す** |
 | 開発用ログインの本番無効化 | `isDevLoginEnabled()`が`NODE_ENV=production`とシークレット未設定の二重で偽 | unit: `dev-login.test.ts`。smoke: `scripts/check-dev-login-disabled.sh`（シークレットをわざと与えて起動し、404とリダイレクトを確認） | 担保あり |
 | シークレット・個人情報の混入 | `.env.local`はgit管理外。`ALLOWED_GOOGLE_EMAILS`等の実値はGitHub Secrets/1Passwordのみ | レビューで見る。`.env.example`は空値のみ | 運用で担保 |
 
@@ -75,6 +77,9 @@ Nodeはstrip-onlyモードでTSを実行するため、テストとそこから�
 - 候補の抽出結果（テキスト）だけを`IntakeCandidate`に残し、欄ごとに`confidence`を付ける。**自動確定はしない**（README「プロダクト方針」。`initialCandidateStatus()`は確からしさを引数に取らない）
 - 費用の上限は家庭ごとに持ち、**応答が届いた失敗でも払ったトークンを記録する**（0にすると上限が効かない）
 - unitテスト: 形式判定・付帯情報の除去・サイズ上限・枚数上限の境界値。モデルAPIには接続せず、`ANTHROPIC_BASE_URL`をローカルのスタブへ向けて確定前後の状態を検証する
+- **保存するかどうかは機能ごとに決めてよい。** #10はレシートを後から見返せるようにMariaDBへ保存するが、
+  **#11（減らす写真）は保存せず、指紋（SHA-256）だけを残す**——飲み終わった容器の写真は見返す意味が薄く、
+  保存すると保存期間・削除の設定をもう一系統持つことになるため。**指紋は消さない**（消すと再送を止められない）
 
 ## 4. 操作の追跡（監査）について
 
