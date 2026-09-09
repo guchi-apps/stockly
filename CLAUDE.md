@@ -92,6 +92,12 @@ pnpm build:ci
 `test:unit`はNode標準の`node --test`で`src/**/*.test.ts`を実行する（テストランナーの依存は入れていない）。
 テストからの相対importは`./access.ts`のように拡張子を付ける（Nodeが拡張子付きしか解決しないため。
 tsconfigの`allowImportingTsExtensions`はこのために有効にしている）。DB・外部サービスには接続しない。
+**クライアントコンポーネントで`useEffect`の中から同期的に`setState`を呼ばない**（#12）。
+eslintの`react-hooks/set-state-in-effect`がエラーにする。propの変化に合わせて状態を捨てたいときは
+**描画中に前回の値と突き合わせて捨てる**（`ConnectionStatus`）、作り直したいときは`key`を付ける
+（`IssuedLink`）、`window`が要る値は`typeof window === "undefined"`で分岐して描画中に組む。
+`useEffect`に残してよいのは外部システムの購読と後片付けだけ。
+
 **Nodeの実行はstrip-onlyモードなので、型注釈以外のTS構文（`enum`・`namespace`・パラメータプロパティ）は
 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`で落ちる。** テスト・`prisma/seed.ts`と、そこから読まれるモジュールでは
 `enum`を使わず、union型か`as const`オブジェクトで書く。
@@ -146,6 +152,14 @@ JSを読まない`curl`でも、Next.jsがフォームへ埋める`$ACTION_ID_�
 200で返るだけ**なので、成功したように見えて何も起きない。`curl -F "$ACTION_ID_…=" -F "<欄>=<値>"`とし、
 `Location`ヘッダーの`?notice=`／`?error=`で結果を見る（サーバーコンポーネントのフォームだけ。
 `useActionState`を使うクライアント側のフォームはHTMLにIDが出ないので、この手では叩けない）。
+
+**画面に出ていないServer Actionも、`$ACTION_ID_`を本文に入れれば叩ける**（#12）。権限で
+ボタンを隠している操作（オーナー専用など）を「隠しているだけでなくサーバーが拒否すること」まで
+確かめたいとき、HTMLには`$ACTION_ID_…`が出ない。idは`.next/dev/server/server-reference-manifest.json`の
+`node`の各キー（`workers`にそのページ名が入っている）から拾い、`curl -F '$ACTION_ID_<id>=' -F '<欄>=<値>'`で
+送れば実行される。**このとき`Next-Action: <id>`ヘッダーは使わない**——FormDataを1引数で受ける
+Server Actionには`Connection closed.`の500が返るだけで、拒否されたのかどうかが読めない
+（ヘッダー方式が要るのは`useActionState`のアクションだけ）。
 
 **`useActionState`のフォームをcurlで叩くときは、フォームの欄を`0`より前に置く**（#8）。
 サーバーコンポーネントのフォームと違い`$ACTION_ID_…`はHTMLに出ないので、`Next-Action:<id>`
