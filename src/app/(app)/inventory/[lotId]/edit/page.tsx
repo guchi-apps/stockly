@@ -26,8 +26,8 @@ export default async function EditStockLotPage({ params }: PageProps<"/inventory
         operationId={newOperationId()}
         locations={options.locations}
         categories={options.categories}
-        lockUnit
-        amountHint="数量を変えると、差分が「訂正」として履歴に残ります。"
+        restrictUnitTo={lot.unit}
+        amountHint="数量や単位を間違えて登録した場合、直したぶんの差分が「訂正」として履歴に残ります。"
         initial={{
           productName: lot.product.name,
           categoryName: lot.product.category?.name ?? "",

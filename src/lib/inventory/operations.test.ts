@@ -5,6 +5,7 @@ import {
   InventoryInputError,
   applyRecordToLot,
   canReverse,
+  convertLotUnit,
   formatQuantityWithUnit,
   nextLotStatus,
   parseAmount,
@@ -140,6 +141,35 @@ describe("applyRecordToLot", () => {
     });
 
     assert.equal(next.amount.toString(), "1000");
+  });
+});
+
+describe("convertLotUnit", () => {
+  it("換算できる単位（kg→g）へ数量を換算する", () => {
+    const converted = convertLotUnit(quantity("1.5", "KILOGRAM"), "GRAM");
+
+    assert.equal(converted.amount.toString(), "1500");
+    assert.equal(converted.unit, "GRAM");
+  });
+
+  it("同じ単位を指定すると数量はそのまま", () => {
+    const converted = convertLotUnit(quantity("3", "PIECE"), "PIECE");
+
+    assert.equal(converted.amount.toString(), "3");
+  });
+
+  it("換算できない単位（個数系どうし）への変更を拒否する", () => {
+    assert.throws(
+      () => convertLotUnit(quantity("3", "PIECE"), "PACK"),
+      /変更できません/,
+    );
+  });
+
+  it("換算できない単位（次元が違う）への変更を拒否する", () => {
+    assert.throws(
+      () => convertLotUnit(quantity("500", "GRAM"), "MILLILITER"),
+      /変更できません/,
+    );
   });
 });
 

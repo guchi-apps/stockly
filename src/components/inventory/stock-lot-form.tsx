@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SourceChip } from "@/components/inventory/source-chip";
 import type { CandidateSource, CandidateSources } from "@/lib/barcode/candidate";
 import { EXPIRY_KINDS, EXPIRY_KIND_LABELS, hasExpiryDate } from "@/lib/inventory/operations";
-import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
+import { UNIT_DEFINITIONS, canConvert, type UnitCode } from "@/lib/inventory/units";
 
 /**
  * 在庫の登録・編集フォーム。
@@ -53,7 +53,7 @@ export function StockLotForm({
   submitLabel,
   cancelHref,
   hidden = {},
-  lockUnit = false,
+  restrictUnitTo,
   amountHint,
   sources = {},
   beforeFields,
@@ -66,7 +66,11 @@ export function StockLotForm({
   submitLabel: string;
   cancelHref: string;
   hidden?: Record<string, string>;
-  lockUnit?: boolean;
+  /**
+   * 指定すると、この単位から換算できる単位だけを選べるようにする（#56）。編集画面が
+   * ロットの現在の単位を渡す。省略時（登録画面）はすべての単位から選べる。
+   */
+  restrictUnitTo?: UnitCode;
   amountHint?: string;
   /** 欄ごとの候補の出所。バーコードから開いたときだけ渡る。 */
   sources?: CandidateSources;
@@ -159,23 +163,26 @@ export function StockLotForm({
             />
           </Field>
 
-          <Field label="単位" error={state.errors.unit} htmlFor="unit" source={sources.unit}>
-            {lockUnit ? (
-              <>
-                <input type="hidden" name="unit" value={value("unit", "PIECE")} />
-                <p className="border-input flex h-11 items-center rounded-lg border px-3 text-base">
-                  {UNIT_DEFINITIONS[value("unit", "PIECE") as keyof typeof UNIT_DEFINITIONS]?.label}
-                </p>
-              </>
-            ) : (
-              <NativeSelect id="unit" name="unit" defaultValue={value("unit", "PIECE")}>
-                {Object.entries(UNIT_DEFINITIONS).map(([code, definition]) => (
+          <Field
+            label="単位"
+            error={state.errors.unit}
+            htmlFor="unit"
+            source={sources.unit}
+            hint={
+              restrictUnitTo
+                ? "換算できる単位だけ選べます。まったく違う単位に直したいときは、取り消してから登録し直してください。"
+                : undefined
+            }
+          >
+            <NativeSelect id="unit" name="unit" defaultValue={value("unit", "PIECE")}>
+              {Object.entries(UNIT_DEFINITIONS)
+                .filter(([code]) => !restrictUnitTo || canConvert(restrictUnitTo, code as UnitCode))
+                .map(([code, definition]) => (
                   <option key={code} value={code}>
                     {definition.label}
                   </option>
                 ))}
-              </NativeSelect>
-            )}
+            </NativeSelect>
           </Field>
         </div>
 

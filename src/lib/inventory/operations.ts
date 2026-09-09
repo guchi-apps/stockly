@@ -17,6 +17,7 @@ import {
   Decimal,
   UNIT_DEFINITIONS,
   canConvert,
+  convertQuantity,
   quantity,
   type Quantity,
   type UnitCode,
@@ -221,6 +222,24 @@ export function applyRecordToLot(
     );
   }
   return next;
+}
+
+/**
+ * ロットの単位を変更する（#56）。
+ *
+ * 「kgのつもりでgを選んでしまった」のような登録ミスの訂正を想定し、換算できる単位
+ * （次元が同じ単位）へだけ変更を許す。個数系（個・パック等）は入数が分からず互いに
+ * 換算できないため、実質「変更できない」（`canConvert()`が同一単位以外false）。
+ * 次元がまったく違う単位への訂正はこの関数の対象外で、取消して登録し直す運用にする。
+ */
+export function convertLotUnit(current: Quantity, targetUnit: UnitCode): Quantity {
+  if (!canConvert(current.unit, targetUnit)) {
+    throw new InventoryInputError(
+      "unit",
+      `単位「${UNIT_DEFINITIONS[current.unit].label}」は「${UNIT_DEFINITIONS[targetUnit].label}」へ変更できません（換算できない単位のため）。`,
+    );
+  }
+  return convertQuantity(current, targetUnit);
 }
 
 /**
