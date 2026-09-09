@@ -7,6 +7,7 @@ import {
   HouseholdAccessError,
   listAccessibleHouseholdIds,
   requireHouseholdAccess,
+  resolveActiveHouseholdId,
   resolveDefaultHouseholdId,
   scopeToHousehold,
   type HouseholdMembership,
@@ -144,5 +145,24 @@ describe("値が欠けているときは拒否する（fail-closed）", () => {
 
     assert.equal(await canAccessHousehold(brokenStore, ME, HOME), false);
     assert.deepEqual(await listAccessibleHouseholdIds(brokenStore, ME), []);
+  });
+});
+
+describe("resolveActiveHouseholdId", () => {
+  it("所属している家庭を指していれば、その家庭を見せる", () => {
+    assert.equal(resolveActiveHouseholdId(["h1", "h2"], "h2"), "h2");
+  });
+
+  it("所属していない家庭を指していたら、既定（いちばん古い所属）へ落とす", () => {
+    assert.equal(resolveActiveHouseholdId(["h1", "h2"], "h3"), "h1");
+  });
+
+  it("指定が無ければ既定を使う", () => {
+    assert.equal(resolveActiveHouseholdId(["h1", "h2"], null), "h1");
+    assert.equal(resolveActiveHouseholdId(["h1"], "  "), "h1");
+  });
+
+  it("どこにも所属していなければnull", () => {
+    assert.equal(resolveActiveHouseholdId([], "h1"), null);
   });
 });

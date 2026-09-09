@@ -482,3 +482,25 @@ export async function getProductDisasterAttributes(ctx: InventoryContext, produc
     },
   });
 }
+
+/**
+ * 在庫がどこまで動いたかを表す短い文字列（#12）。
+ *
+ * 端末をまたいだ同期の判定に使う。**在庫の中身は返さない**——「変わったかどうか」だけを
+ * 知りたい問い合わせなので、一覧をまるごと取り直すと画面を開いていない端末のぶんまで
+ * DBを引くことになる。件数と最終更新時刻だけの集計1本で済ませる。
+ *
+ * ロットの数量は履歴を積むたびに更新されるため、記録・取消・編集・登録のいずれでも
+ * この値が変わる。保管場所や商品マスタだけを直した場合は変わらない（在庫の数量に効かないため）。
+ */
+export async function getInventoryRevision(ctx: InventoryContext): Promise<string> {
+  const householdId = await scope(ctx);
+
+  const summary = await db.stockLot.aggregate({
+    where: { householdId },
+    _count: { _all: true },
+    _max: { updatedAt: true },
+  });
+
+  return `${summary._count._all}:${summary._max.updatedAt?.getTime() ?? 0}`;
+}

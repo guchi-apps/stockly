@@ -14,6 +14,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // **`env(safe-area-inset-*)`はこれが無いと常に0を返す**（#12）。ホーム画面から起動した
+  // iPhoneで画面の端まで描くための指定で、下タブの`pb-[env(safe-area-inset-bottom)]`や
+  // 横向きの左右の余白は、この1行が入って初めて効く。
+  viewportFit: "cover",
   // globals.cssの--background（ライト/ダーク）と同じ色。OSのステータスバーを地の色に馴染ませる。
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },

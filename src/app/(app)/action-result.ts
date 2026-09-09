@@ -6,6 +6,8 @@
  * open redirectの防止そのものなので、画面ごとに書き写さない。**
  */
 import { resolveInternalPathOr } from "@/lib/auth/internal-path";
+import { HouseholdAccessError } from "@/lib/household/access";
+import { HouseholdInputError, HouseholdPermissionError } from "@/lib/household/members";
 import { InventoryInputError } from "@/lib/inventory/operations";
 import { InventoryConflictError, InventoryNotFoundError } from "@/lib/inventory/service";
 
@@ -32,10 +34,19 @@ export function userFacingMessage(error: unknown): string {
   if (
     error instanceof InventoryInputError ||
     error instanceof InventoryConflictError ||
-    error instanceof InventoryNotFoundError
+    error instanceof InventoryNotFoundError ||
+    error instanceof HouseholdInputError ||
+    error instanceof HouseholdPermissionError
   ) {
     return error.message;
   }
+
+  // 所属していない家庭を指すidが送られてきた場合（#12）。メッセージにidを含めたくないので
+  // ここで置き換える。原因は`HouseholdAccessError`としてサーバーのログに残る。
+  if (error instanceof HouseholdAccessError) {
+    return "この家庭のデータへはアクセスできません。画面を開き直してください。";
+  }
+
   throw error;
 }
 

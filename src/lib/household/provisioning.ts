@@ -36,7 +36,13 @@ export async function ensureStocklyUser(profile: StocklyUserProfile) {
   });
 
   // 2回目以降のログインではトランザクションを張らずに済ませる（毎回の行ロックを避けるため）。
-  if ((await db.householdMember.count({ where: { userId: user.id } })) > 0) return user;
+  //
+  // 数えるのは**いま所属している**行だけ（`removedAt: null`。#12）。除名・脱退では行が残るため、
+  // ここで外れた行まで数えると、全部の家庭から外れた人が次にログインしても家庭を持てず、
+  // 画面から作る手段も無いまま「家庭が未設定」で固まる。
+  if ((await db.householdMember.count({ where: { userId: user.id, removedAt: null } })) > 0) {
+    return user;
+  }
 
   await db.$transaction(async (tx) => {
     // **同じ利用者の初回ログインが同時に2つ走ると、所属の件数を数えた直後に両方が
@@ -44,7 +50,9 @@ export async function ensureStocklyUser(profile: StocklyUserProfile) {
     // 自分のUser行をロックして後続を待たせる。件数の確認と作成をこのロックの内側へ入れる。
     await tx.$queryRaw`SELECT id FROM User WHERE id = ${user.id} FOR UPDATE`;
 
-    if ((await tx.householdMember.count({ where: { userId: user.id } })) > 0) return;
+    if ((await tx.householdMember.count({ where: { userId: user.id, removedAt: null } })) > 0) {
+      return;
+    }
 
     const household = await tx.household.create({
       data: { name: defaultHouseholdName(profile) },

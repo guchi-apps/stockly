@@ -139,3 +139,24 @@ export async function resolveDefaultHouseholdId(
   const householdIds = await listAccessibleHouseholdIds(store, userId);
   return householdIds[0] ?? null;
 }
+
+/**
+ * いま見せる家庭を決める（#12）。
+ *
+ * 複数の家庭に所属しうるので（自宅と実家、招待された家庭）、既定の1件だけでは足りない。
+ * 画面で選んだ家庭はCookieに入れて次のリクエストへ持ち越すが、**Cookieの値は書き換えられる**ため、
+ * ここで「所属している家庭のidであること」を必ず確かめる。所属していない値ならnullではなく
+ * 既定の家庭へ落とす（画面が空になるより、自分の家庭が出るほうが直しやすい）。
+ *
+ * この関数を通っても越境は起きない。`scopeToHousehold()`が改めて所属を確かめるため、
+ * ここは「どれを見せるか」を決めるだけで、権限そのものは持たない。
+ */
+export function resolveActiveHouseholdId(
+  accessibleHouseholdIds: readonly string[],
+  requestedHouseholdId: string | null | undefined,
+): string | null {
+  if (isUsableId(requestedHouseholdId) && accessibleHouseholdIds.includes(requestedHouseholdId)) {
+    return requestedHouseholdId;
+  }
+  return accessibleHouseholdIds[0] ?? null;
+}

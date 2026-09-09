@@ -3,8 +3,10 @@ import { cookies, headers } from "next/headers";
 import { SUPABASE_USER_ID_HEADER } from "@/lib/auth/auth-header";
 import { DEV_LOGIN_COOKIE_NAME, resolveDevLoginUserId } from "@/lib/auth/dev-login";
 import { db } from "@/lib/db";
+import { readActiveHouseholdCookie } from "@/lib/household/active-household";
 import {
   listAccessibleHouseholdIds,
+  resolveActiveHouseholdId,
   resolveDefaultHouseholdId,
 } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
@@ -32,20 +34,25 @@ export async function getCurrentUserId(): Promise<string | null> {
 }
 
 /**
- * ログイン中の利用者と、既定で見せる家庭をまとめて返す。
+ * ログイン中の利用者と、いま見せる家庭をまとめて返す。
  *
  * 在庫を扱う画面・APIはここで得た`householdId`を`scopeToHousehold()`へ渡す。
+ *
+ * **どの家庭を見せるかはCookieで持ち越す**（#12）。複数の家庭に所属しうるため、いちばん古い
+ * 所属に固定すると、招待されて参加しても自分の家庭が出たままになる。Cookieの値は
+ * `resolveActiveHouseholdId()`が所属しているidかを確かめてから使う。
  */
 export async function getCurrentSession() {
   const user = await getCurrentUser();
   if (!user) return null;
 
   const householdIds = await listAccessibleHouseholdIds(householdMembershipStore, user.id);
+  const requested = await readActiveHouseholdCookie();
 
   return {
     user,
     householdIds,
-    householdId: householdIds[0] ?? null,
+    householdId: resolveActiveHouseholdId(householdIds, requested),
   };
 }
 
