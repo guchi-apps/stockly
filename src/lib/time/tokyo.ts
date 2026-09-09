@@ -42,6 +42,22 @@ export function tokyoDaysBetween(from: Date, to: Date): number {
   return tokyoDayNumber(to) - tokyoDayNumber(from);
 }
 
+/**
+ * 日本時間での「今月」の範囲を、実際の時刻（UTC）で返す。`start`以上`end`未満。
+ *
+ * 費用の上限は「月あたり」で数えるため、月の変わり目もここで決める（#10）。UTCで数えると、
+ * **月初の0時〜9時に使ったぶんが前の月に数えられ、上限に達したまま月が変わっても解けない。**
+ */
+export function tokyoMonthRange(now: Date = new Date()): { start: Date; end: Date } {
+  const jst = tokyoParts(now);
+  const year = jst.getUTCFullYear();
+  const month = jst.getUTCMonth();
+  return {
+    start: new Date(Date.UTC(year, month, 1) - TOKYO_OFFSET_MS),
+    end: new Date(Date.UTC(year, month + 1, 1) - TOKYO_OFFSET_MS),
+  };
+}
+
 function tokyoParts(value: Date): Date {
   return new Date(value.getTime() + TOKYO_OFFSET_MS);
 }

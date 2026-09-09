@@ -34,8 +34,6 @@ describe("buildStockLotCandidate", () => {
   };
 
   const rule = {
-    categoryName: "飲料",
-    unit: "BOTTLE" as const,
     storageLocationId: "loc-pantry",
     storagePositionId: "pos-lower",
     expiryKind: "BEST_BEFORE" as const,
@@ -43,20 +41,22 @@ describe("buildStockLotCandidate", () => {
     confirmedCount: 3,
   };
 
-  it("確定済みルールがマスタより強い", () => {
+  it("確定済みルールが保管場所でマスタより強い", () => {
     const candidate = buildStockLotCandidate({ rule, master, today: TODAY });
 
-    assert.equal(candidate.values.categoryName, "飲料");
-    assert.equal(candidate.sources.categoryName, "RULE");
-    assert.equal(candidate.values.unit, "BOTTLE");
-    assert.equal(candidate.sources.unit, "RULE");
+    assert.equal(candidate.values.storageLocationId, "loc-pantry");
+    assert.equal(candidate.sources.storageLocationId, "RULE");
   });
 
-  it("ルールが持たない商品名はマスタから採る", () => {
+  it("ルールが持たない商品名・カテゴリ・単位はマスタから採る（正本はProduct）", () => {
     const candidate = buildStockLotCandidate({ rule, master, today: TODAY });
 
     assert.equal(candidate.values.productName, "コカ・コーラ 500mL");
     assert.equal(candidate.sources.productName, "BARCODE");
+    assert.equal(candidate.values.categoryName, "炭酸飲料");
+    assert.equal(candidate.sources.categoryName, "BARCODE");
+    assert.equal(candidate.values.unit, "PIECE");
+    assert.equal(candidate.sources.unit, "BARCODE");
   });
 
   it("マスタしか無ければマスタの値を出す", () => {
@@ -77,8 +77,10 @@ describe("buildStockLotCandidate", () => {
 
     assert.equal(candidate.values.productName, "コカ・コーラ 500mL");
     assert.equal(candidate.sources.productName, "BARCODE");
-    assert.equal(candidate.values.categoryName, "飲料");
-    assert.equal(candidate.sources.categoryName, "RULE");
+    assert.equal(candidate.values.categoryName, "炭酸飲料");
+    assert.equal(candidate.sources.categoryName, "BARCODE");
+    assert.equal(candidate.values.expiryKind, "BEST_BEFORE");
+    assert.equal(candidate.sources.expiryKind, "RULE");
   });
 
   it("AI候補だけがある欄はAI候補を出す", () => {
@@ -121,13 +123,13 @@ describe("buildStockLotCandidate", () => {
 
   it("空文字は値なしとして次の候補へ落とす", () => {
     const candidate = buildStockLotCandidate({
-      rule: { ...rule, categoryName: "" },
-      master,
+      master: { ...master, categoryName: "" },
+      ai: { categoryName: "ジュース" },
       today: TODAY,
     });
 
-    assert.equal(candidate.values.categoryName, "炭酸飲料");
-    assert.equal(candidate.sources.categoryName, "BARCODE");
+    assert.equal(candidate.values.categoryName, "ジュース");
+    assert.equal(candidate.sources.categoryName, "AI");
   });
 
   it("数量は候補にしない（毎回その場で決めるもの）", () => {

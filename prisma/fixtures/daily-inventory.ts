@@ -328,8 +328,6 @@ const BARCODES: FixtureBarcode[] = [
 interface FixtureRule {
   id: string;
   productId: string;
-  categoryId: string;
-  unit: UnitCode;
   storageLocationId: string;
   storagePositionId?: string;
   expiryKind: "NONE" | "BEST_BEFORE" | "USE_BY";
@@ -347,8 +345,6 @@ const PRODUCT_RULES: FixtureRule[] = [
   {
     id: "fx-rule-water",
     productId: "fx-product-water",
-    categoryId: "fx-category-drink",
-    unit: "BOTTLE",
     storageLocationId: "fx-location-pantry",
     storagePositionId: "fx-position-pantry-floor",
     expiryKind: "BEST_BEFORE",
@@ -358,8 +354,6 @@ const PRODUCT_RULES: FixtureRule[] = [
   {
     id: "fx-rule-cup-noodle",
     productId: "fx-product-cup-noodle",
-    categoryId: "fx-category-food",
-    unit: "PIECE",
     storageLocationId: "fx-location-pantry",
     storagePositionId: "fx-position-pantry-upper",
     expiryKind: "BEST_BEFORE",
@@ -369,8 +363,6 @@ const PRODUCT_RULES: FixtureRule[] = [
   {
     id: "fx-rule-toilet-paper",
     productId: "fx-product-toilet-paper",
-    categoryId: "fx-category-daily",
-    unit: "ROLL",
     storageLocationId: "fx-location-emergency-bag",
     expiryKind: "NONE",
     confirmedCount: 1,
@@ -772,8 +764,6 @@ async function main(): Promise<void> {
         id: rule.id,
         householdId: HOUSEHOLD_ID,
         productId: productIds.get(rule.productId) as string,
-        categoryId: categoryIds.get(rule.categoryId) ?? null,
-        unit: rule.unit,
         storageLocationId: locationIds.get(rule.storageLocationId) as string,
         storagePositionId: rule.storagePositionId
           ? (positionIds.get(rule.storagePositionId) as string)

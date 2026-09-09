@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft, LifeBuoy, Pencil } from "lucide-react";
 
 import { recordTransactionAction } from "@/app/(app)/actions";
 import { ActionNotice, PageHeader, firstValue } from "@/components/inventory/chrome";
@@ -58,6 +58,12 @@ export default async function StockLotPage({ params, searchParams }: PageProps<"
               <Button asChild variant="ghost" size="icon-lg" className="md:hidden">
                 <Link href="/inventory" aria-label="在庫一覧へ戻る">
                   <ArrowLeft className="size-4" aria-hidden />
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="lg">
+                <Link href={`/products/${lot.product.id}/disaster?returnTo=${encodeURIComponent(backTo)}`}>
+                  <LifeBuoy className="size-4" aria-hidden />
+                  防災属性
                 </Link>
               </Button>
               <Button asChild variant="outline" size="lg">

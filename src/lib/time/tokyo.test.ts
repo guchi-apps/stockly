@@ -5,6 +5,7 @@ import {
   formatTokyoDate,
   formatTokyoDateTime,
   toTokyoDateInput,
+  tokyoMonthRange,
   tokyoDayNumber,
   tokyoDaysBetween,
   tokyoToday,
@@ -71,5 +72,26 @@ describe("表示", () => {
   it("入力欄の形式へ直す", () => {
     assert.equal(toTokyoDateInput(day("2026-09-08")), "2026-09-08");
     assert.equal(toTokyoDateInput(new Date("2026-09-08T23:30:00.000Z")), "2026-09-09");
+  });
+});
+
+describe("tokyoMonthRange", () => {
+  it("日本時間の月初から翌月初までを返す", () => {
+    const { start, end } = tokyoMonthRange(new Date("2026-09-08T12:00:00.000Z"));
+    // 2026-09-01 00:00 JST = 2026-08-31 15:00 UTC
+    assert.equal(start.toISOString(), "2026-08-31T15:00:00.000Z");
+    assert.equal(end.toISOString(), "2026-09-30T15:00:00.000Z");
+  });
+
+  it("月初のJST0時〜9時を前の月に数えない", () => {
+    // 2026-09-01 03:00 JST（UTCではまだ8月31日）
+    const { start } = tokyoMonthRange(new Date("2026-08-31T18:00:00.000Z"));
+    assert.equal(start.toISOString(), "2026-08-31T15:00:00.000Z");
+  });
+
+  it("年をまたぐ月でも翌月が正しい", () => {
+    const { start, end } = tokyoMonthRange(new Date("2026-12-15T00:00:00.000Z"));
+    assert.equal(start.toISOString(), "2026-11-30T15:00:00.000Z");
+    assert.equal(end.toISOString(), "2026-12-31T15:00:00.000Z");
   });
 });

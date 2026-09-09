@@ -8,6 +8,8 @@
  * 数量は必ず`Decimal`で扱う。`number`は0.1+0.2が0.30000000000000004になり、
  * 0.4ロールのような小数の在庫がすぐ合わなくなる。
  */
+import type { $Enums } from "@prisma/client";
+
 import { tokyoDaysBetween } from "../time/tokyo.ts";
 
 import { applyEntry, isReversed, type LedgerEntry } from "./ledger.ts";
@@ -427,6 +429,16 @@ export type StorageKind = (typeof STORAGE_KINDS)[number];
 export const TEMPERATURE_ZONES = ["AMBIENT", "CHILLED", "FROZEN"] as const;
 export type TemperatureZone = (typeof TEMPERATURE_ZONES)[number];
 
+/**
+ * 温度帯の表示名。**画面ごとに書き写さない**（保管場所の一覧・保管場所の追加・商品の防災属性の
+ * 3画面が同じラベルを別々に持っていたのを、ここへまとめた。#47のレビュー指摘）。
+ */
+export const TEMPERATURE_ZONE_LABELS: Readonly<Record<TemperatureZone, string>> = {
+  AMBIENT: "常温",
+  CHILLED: "冷蔵",
+  FROZEN: "冷凍",
+};
+
 export function parseStorageLocationForm(input: RawInput): ParseResult<StorageLocationFormValue> {
   return collect(() => {
     const name = text(input, "name");
@@ -439,6 +451,147 @@ export function parseStorageLocationForm(input: RawInput): ParseResult<StorageLo
 
     return { name, kind, temperatureZone };
   });
+}
+
+// ---------------------------------------------------------------------------
+// 商品の防災属性（#47）
+// ---------------------------------------------------------------------------
+
+/**
+ * 非常時にその商品が担う役割。`prisma/schema.prisma`の`EmergencyRole`から型を引く
+ * （`disaster/rules.ts`の`EmergencyRole`と同じ引き方）。**手書きの`as const`配列で複製しない。**
+ * `Record<EmergencyRole, string>`にしておけば、schema側に値を足したときに
+ * `EMERGENCY_ROLE_LABELS`がキー不足で型エラーになり、選択肢に出さないまま漏れることを防げる
+ * （計画レビューでの指摘）。
+ *
+ * `src/lib/disaster/rules.ts`の`DISASTER_CATEGORY_RULES`が、このうち一部だけを集計へ割り当てる。
+ * `NONE`・`UTILITY_WATER`・`MEDICAL`・`OTHER`は記録用で、防災の集計には出てこない
+ * （どれが集計対象かは`categoryOfRole()`が持つ。ここでは重複して持たない）。
+ */
+export type EmergencyRole = $Enums.EmergencyRole;
+
+export const EMERGENCY_ROLE_LABELS: Readonly<Record<EmergencyRole, string>> = {
+  NONE: "なし（対象外）",
+  STAPLE_FOOD: "主食",
+  SIDE_DISH: "主菜・副菜",
+  DRINKING_WATER: "飲料水",
+  UTILITY_WATER: "生活用水",
+  HEAT_SOURCE: "熱源（カセットボンベ等）",
+  SANITATION: "衛生（携帯トイレ等）",
+  LIGHTING: "照明（ライト・ランタン）",
+  POWER: "電源（モバイルバッテリー・乾電池）",
+  MEDICAL: "医療",
+  OTHER: "その他",
+};
+
+/** 選択肢の並び。`EMERGENCY_ROLE_LABELS`のキー順（オブジェクトの列挙順）をそのまま使う。 */
+export const EMERGENCY_ROLES = Object.keys(EMERGENCY_ROLE_LABELS) as EmergencyRole[];
+
+/**
+ * 商品の防災属性の入力。1商品につき1組で、その商品のすべての在庫ロットに共通で効く
+ * （ロットごとには持たない）。
+ */
+export interface ProductDisasterFormValue {
+  readonly emergencyRole: EmergencyRole;
+  /** 1defaultUnitあたりの食数。空欄はnull（その区分の在庫としては数えられない）。 */
+  readonly servingsPerUnit: Decimal | null;
+  /** 1defaultUnitあたりの使用回数。空欄はnull。 */
+  readonly usesPerUnit: Decimal | null;
+  /**
+   * 1defaultUnitあたりの内容量（例: 1本 = 2 LITER）。`contentUnit`と対で持ち、片方だけでは使えない。
+   * 飲料（`DRINKING_WATER`）はこの2つが無いと、個数系の単位（本・パック等）で登録した在庫が
+   * `LITER`へ換算できず防災の集計に算入されない（計画レビューでの指摘）。
+   */
+  readonly contentAmount: Decimal | null;
+  readonly contentUnit: UnitCode | null;
+  readonly requiresHeating: boolean;
+  readonly requiresWater: boolean;
+  readonly temperatureZone: TemperatureZone;
+}
+
+export function parseProductDisasterForm(input: RawInput): ParseResult<ProductDisasterFormValue> {
+  return collect(() => {
+    const { contentAmount, contentUnit } = parseContentAmount(input);
+    return {
+      emergencyRole: parseEmergencyRole(input.emergencyRole),
+      servingsPerUnit: parsePerUnitCount(input.servingsPerUnit, "servingsPerUnit", "1単位あたりの食数"),
+      usesPerUnit: parsePerUnitCount(input.usesPerUnit, "usesPerUnit", "1単位あたりの使用回数"),
+      contentAmount,
+      contentUnit,
+      requiresHeating: text(input, "requiresHeating") === "on",
+      requiresWater: text(input, "requiresWater") === "on",
+      temperatureZone:
+        TEMPERATURE_ZONES.find((value) => value === text(input, "temperatureZone")) ?? "AMBIENT",
+    };
+  });
+}
+
+function parseEmergencyRole(raw: string | undefined | null): EmergencyRole {
+  const value = (raw ?? "NONE").trim();
+  const found = EMERGENCY_ROLES.find((role) => role === value);
+  if (!found) throw new InventoryInputError("emergencyRole", "非常時の役割を選んでください。");
+  return found;
+}
+
+/**
+ * 1defaultUnitあたりの内容量と、その単位。**どちらも入れるか、どちらも空にする**
+ * （`perUnitEquivalentsOf()`は`contentAmount && contentUnit`の組でしか使わないため、
+ * 片方だけ残しても効かない値になり、利用者が「設定したのに集計に出ない」と気づけない）。
+ */
+function parseContentAmount(input: RawInput): {
+  contentAmount: Decimal | null;
+  contentUnit: UnitCode | null;
+} {
+  const contentAmount = parsePerUnitCount(input.contentAmount, "contentAmount", "1単位あたりの内容量");
+
+  const rawUnit = text(input, "contentUnit");
+  if (rawUnit !== "" && !(rawUnit in UNIT_DEFINITIONS)) {
+    throw new InventoryInputError("contentUnit", "単位を選んでください。");
+  }
+  const contentUnit = rawUnit === "" ? null : (rawUnit as UnitCode);
+
+  if ((contentAmount !== null) !== (contentUnit !== null)) {
+    throw new InventoryInputError(
+      "contentAmount",
+      "内容量と単位はどちらも入れるか、どちらも空にしてください。",
+    );
+  }
+  return { contentAmount, contentUnit };
+}
+
+/**
+ * 1単位あたりの食数・使用回数。**空欄は`null`を許す**点が`parseAmount()`と違う
+ * （防災の判定に使わない商品では、この欄を埋める理由が無い）。0は「1単位に満たない」という
+ * 意味を持たないため受け付けない（空欄にするか、1以上の値を入れる）。
+ */
+function parsePerUnitCount(
+  raw: string | undefined | null,
+  field: string,
+  label: string,
+): Decimal | null {
+  const normalized = (raw ?? "")
+    .trim()
+    .replace(/[０-９．]/g, (char) =>
+      char === "．" ? "." : String.fromCharCode(char.charCodeAt(0) - 0xfee0),
+    )
+    .replace(/,/g, "");
+
+  if (normalized === "") return null;
+  if (!/^\d+(\.\d+)?$/.test(normalized)) {
+    throw new InventoryInputError(field, `${label}は数字で入力してください。`);
+  }
+
+  const amount = new Decimal(normalized);
+  if (amount.isZero()) {
+    throw new InventoryInputError(
+      field,
+      `${label}は0より大きい値を入力してください（使わないなら空欄にしてください）。`,
+    );
+  }
+  if (amount.decimalPlaces() > QUANTITY_SCALE) {
+    throw new InventoryInputError(field, `${label}の小数は${QUANTITY_SCALE}桁までです（例: 0.4）。`);
+  }
+  return amount;
 }
 
 /** 期限の設定（家庭ごと）の入力。 */
