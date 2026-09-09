@@ -8,11 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  CANDIDATE_SOURCE_LABELS,
-  type CandidateSource,
-  type CandidateSources,
-} from "@/lib/barcode/candidate";
+import { SourceChip } from "@/components/inventory/source-chip";
+import type { CandidateSource, CandidateSources } from "@/lib/barcode/candidate";
 import { EXPIRY_KINDS, EXPIRY_KIND_LABELS, hasExpiryDate } from "@/lib/inventory/operations";
 import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
 
@@ -334,25 +331,6 @@ function Field({
         <p className="text-muted-foreground text-xs">{hint}</p>
       ) : null}
     </div>
-  );
-}
-
-/**
- * 値の出所。優先順位が高いものほど強い見た目にして、並べたときに順位が読めるようにする。
- *
- * 確定済みルール（自分が前回決めた値）＝塗り、バーコードマスタ＝枠線、AI候補＝破線。
- */
-function SourceChip({ source }: { source: CandidateSource }) {
-  const style = {
-    RULE: "bg-foreground text-background font-semibold",
-    BARCODE: "text-foreground ring-1 ring-foreground",
-    AI: "text-muted-foreground ring-1 ring-dashed ring-border",
-  }[source];
-
-  return (
-    <span className={`rounded-full px-2 py-px text-[11px] leading-4 ${style}`}>
-      {CANDIDATE_SOURCE_LABELS[source]}
-    </span>
   );
 }
 

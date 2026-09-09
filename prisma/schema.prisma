@@ -85,6 +85,12 @@ model Household {
   // 家庭内共有（#12）。
   invitations HouseholdInvitation[]
 
+  // 写真からの登録候補（#10）。
+  intakeBatches     IntakeBatch[]
+  intakeImages      IntakeImage[]
+  intakeCandidates  IntakeCandidate[]
+  intakeSetting     IntakeSetting?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -116,6 +122,8 @@ model HouseholdMember {
 
   /// 記録した本人として入出庫履歴から参照される（#3）。
   transactions InventoryTransaction[]
+  /// 写真を取り込んだ本人として参照される（#10）。
+  intakeBatches IntakeBatch[]
 
   /// 同じ家庭に同じ利用者が二重に所属しないことをDBで保証する。
   @@unique([householdId, userId])
@@ -511,6 +519,8 @@ model StorageLocation {
   positions    StoragePosition[]
   stockLots    StockLot[]
   productRules ProductRule[]
+  /// 写真から作った登録候補が置き場所として参照する（#10）。
+  intakeCandidates IntakeCandidate[]
   /// 防災バッグとして点検するときの基準（#8）。種別がEMERGENCY_STOCKの保管場所だけが持つ。
   disasterBag  DisasterBag?
 
@@ -532,6 +542,8 @@ model StoragePosition {
   storageLocation StorageLocation @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
   stockLots       StockLot[]
   productRules    ProductRule[]
+  /// 写真から作った登録候補が詳細位置として参照する（#10）。
+  intakeCandidates IntakeCandidate[]
 
   @@unique([householdId, id])
   @@unique([householdId, storageLocationId, name])
@@ -934,4 +946,249 @@ model DisasterBagInspection {
 
   @@unique([householdId, id])
   @@index([householdId, disasterBagId, inspectedOn])
+}
+
+// ===========================================================================
+// 写真からの登録候補（#10）
+// ===========================================================================
+
+/// 撮った写真の種類。プロンプトの組み立てと、抽出結果の読み方をこれで分ける。
+enum IntakeImageKind {
+  RECEIPT // レシート
+  PURCHASE // 買ってきた品物をまとめて撮ったもの
+  EXPIRY_LABEL // 期限の印字だけを撮ったもの
+  UNKNOWN // 種類を選ばなかった（モデルに判断させる）
+}
+
+/// 取り込み1回の状態。
+enum IntakeBatchStatus {
+  EXTRACTING // モデルへ送っている最中
+  REVIEWING // 抽出できた。人の確認待ち
+  APPLIED // 確認待ちの候補が残っていない
+  FAILED // 抽出に失敗した。手入力へ戻す
+  DISCARDED // 人が破棄した
+}
+
+/// 候補1件の状態。
+enum IntakeCandidateStatus {
+  PENDING // 確認待ち
+  APPLIED // 在庫へ反映した
+  REJECTED // 却下した（レジ袋・値引き行など、在庫にしないもの）
+}
+
+/// 候補の期限の種別。
+///
+/// **`src/lib/inventory/operations.ts`の`EXPIRY_KINDS`と同じ並びにしてある。**
+/// 在庫側の`ExpiryKind`と分けているのは、候補には「読めなかった＝UNKNOWN」があるため
+/// （在庫側の`ExpiryKind`に`UNKNOWN`を足すと、`ProductRule`の意味まで変わる）。
+enum IntakeExpiryKind {
+  UNKNOWN
+  NONE
+  BEST_BEFORE
+  USE_BY
+}
+
+/// 写真を1回取り込んだ記録（#10）。
+///
+/// **判定（候補の中身）はここに保存するが、在庫そのものはまだ動かさない。** 人が確認・修正して
+/// 「反映する」を押したときに、はじめて`src/lib/inventory/service.ts`の`createStockLot()`が動く。
+///
+/// 使ったモデル・プロンプトの版・トークン数を残すのは、あとから「どの条件で出した候補か」を
+/// 説明できるようにするため（#7のルール版と同じ考え方）。**候補の再抽出はしない**——
+/// モデルの応答は同じ入力でも揺れるので、残した候補のほうを正とする。
+model IntakeBatch {
+  id          String @id @default(cuid())
+  householdId String
+  /// 取り込んだ人（HouseholdMember）。システムが入れた行はnull。
+  memberId    String?
+
+  status IntakeBatchStatus @default(EXTRACTING)
+
+  /// 実際に使ったモデルidとプロンプトの版。設定を変えても、この行が指す条件は変わらない。
+  model         String @db.VarChar(60)
+  promptVersion String @db.VarChar(20)
+
+  /// 送受信したトークン数と、そこから出した概算の金額（円）。
+  /// **請求の正はAnthropic側の明細**で、ここは費用上限の歯止めに使う目安。
+  inputTokens      Int     @default(0)
+  outputTokens     Int     @default(0)
+  estimatedCostYen Decimal @default(0) @db.Decimal(10, 3)
+
+  /// 失敗した理由。画面に出して、手入力へ戻す案内と一緒に見せる。
+  error String? @db.Text
+
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household  Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  member     HouseholdMember?  @relation(fields: [householdId, memberId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  images     IntakeImage[]
+  candidates IntakeCandidate[]
+
+  @@unique([householdId, id])
+  @@index([householdId, status, createdAt])
+  /// 今月の使用量（回数・概算金額）は、この索引でこのテーブルを数えて出す。
+  /// 使用量の専用テーブルは持たない（集計で出せるものを別に保存すると必ずずれる）。
+  @@index([householdId, createdAt])
+  @@index([householdId, memberId])
+}
+
+/// 取り込んだ画像1枚。
+///
+/// **同じ画像を送り直しても2件目を作らない**（`@@unique([householdId, sha256])`）。これが
+/// 受入条件の「同じレシート/画像の再送による二重登録を防ぐ」の土台で、2回目のアップロードは
+/// 新しい取り込みを作らず、前回の取り込みへ案内する。
+///
+/// 画像そのもの（`data`）は保存期間を過ぎたら消すが、**`sha256`は消さない**——
+/// ハッシュを消すと、画像を消した瞬間に二重登録の防止が効かなくなる。
+model IntakeImage {
+  id          String @id @default(cuid())
+  householdId String
+  batchId     String
+
+  kind IntakeImageKind @default(UNKNOWN)
+
+  /// 送った画像そのもののSHA-256（16進64文字）。
+  sha256   String @db.Char(64)
+  mimeType String @db.VarChar(60)
+  byteSize Int
+  width    Int?
+  height   Int?
+
+  /// 画像の中身。**保存期間を過ぎるか、利用者が消すとnullになる**（行そのものは残す）。
+  /// 「保存しない」設定の家庭では、抽出が終わった時点でnullにする。
+  data Bytes? @db.LongBlob
+  /// この時刻を過ぎたら`data`を消す。「保存しない」設定ではnull。
+  retainUntil DateTime?
+  /// `data`を実際に消した時刻。画面で「削除済み」と出すために持つ。
+  purgedAt    DateTime?
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household  Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  batch      IntakeBatch       @relation(fields: [householdId, batchId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  candidates IntakeCandidate[]
+
+  @@unique([householdId, id])
+  /// 二重登録の防止。家庭内で同じ画像は1枚だけ持つ。
+  @@unique([householdId, sha256])
+  @@index([householdId, batchId, sortOrder])
+  /// 保存期間切れの掃除がこの索引で走る。
+  @@index([householdId, retainUntil])
+}
+
+/// 写真から作った「在庫の登録候補」1件。
+///
+/// **列は`StockLotFormValue`（`src/lib/inventory/operations.ts`）にそのまま渡せる形に揃えてある。**
+/// 反映は候補ごとに`createStockLot()`を呼ぶだけで、写真専用の在庫の作り方は持たない。
+///
+/// **二重反映の防止に専用の列を持たない。** 反映のとき、この行の`id`をそのまま
+/// `InventoryTransaction.id`（＝`operationId`）に使う。2回目は主キーの重複になるので、
+/// 数量を動かさず`duplicate`として返る（在庫の二重送信対策と同じ方式）。
+///
+/// **読めなかった欄はnullのままにする。** 0や空文字で埋めると「読めなかった」と
+/// 「そう読めた」の区別が消え、受入条件の「読めなかった項目を表示する」を満たせない。
+model IntakeCandidate {
+  id          String @id @default(cuid())
+  householdId String
+  batchId     String
+  /// どの画像から作った候補か。画像を消しても候補は残るのでnullableではなく参照を保つ。
+  imageId     String?
+
+  status IntakeCandidateStatus @default(PENDING)
+
+  // --- 登録の内容（読めなかった欄はnull / 空文字） ---
+  productName  String  @default("") @db.VarChar(120)
+  brand        String  @default("") @db.VarChar(120)
+  categoryName String  @default("") @db.VarChar(120)
+  amount       Decimal? @db.Decimal(14, 3)
+  unit         UnitCode @default(PIECE)
+
+  /// 保管場所は名前ではなくidで持つ。抽出のときに
+  /// 「確定済みルール → 写真から読んだ場所名が既存の保管場所と一致」の順で解決し、
+  /// 決まらなければ未設定にする（**保管場所を勝手に作らない**）。
+  storageLocationId String?
+  storagePositionId String?
+
+  expiryKind IntakeExpiryKind @default(UNKNOWN)
+  expiryDate DateTime?        @db.Date
+  opened     Boolean          @default(false)
+  note       String?          @db.Text
+
+  // --- 候補の説明（受入条件の「信頼度・根拠・読めなかった項目」） ---
+  /// 候補全体の確からしさ（0〜1）。
+  confidence             Decimal? @db.Decimal(4, 3)
+  /// 欄ごとの確からしさ（0〜1）。**画面に常に出すので列として切り出してある。**
+  productNameConfidence  Decimal? @db.Decimal(4, 3)
+  amountConfidence       Decimal? @db.Decimal(4, 3)
+  expiryConfidence       Decimal? @db.Decimal(4, 3)
+  categoryConfidence     Decimal? @db.Decimal(4, 3)
+  storageConfidence      Decimal? @db.Decimal(4, 3)
+
+  /// 抽出の根拠。写真のどこをどう読んだか（レシートの行そのものなど）を人の言葉で残す。
+  evidence String? @db.VarChar(500)
+  /// 欄ごとの出所（`src/lib/barcode/candidate.ts`の`CandidateSources`をそのまま入れる）。
+  /// 判定には使わず、画面のチップにだけ使う表示用のメタデータなのでJsonでよい。
+  fieldSources Json?
+
+  /// 反映してできた在庫ロット。反映済みの候補から在庫へ飛べるようにする。
+  appliedStockLotId String?
+  appliedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household       Household        @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  batch           IntakeBatch      @relation(fields: [householdId, batchId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  image           IntakeImage?     @relation(fields: [householdId, imageId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  /// **`SetNull`にはできない。** 複合外部キーの先頭が`householdId`（NOT NULL）なので、
+  /// MySQLはNULLを入れられずエラーになる。`StockLot`・`ProductRule`と同じ`Restrict`にし、
+  /// 保管場所を消すときは`service.ts`が先に参照を外す。
+  storageLocation StorageLocation? @relation(fields: [householdId, storageLocationId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
+  /// 詳細位置は「同じ家庭の、指定した保管場所の配下」に限る（StockLotと同じ形）。
+  storagePosition StoragePosition? @relation(fields: [householdId, storageLocationId, storagePositionId], references: [householdId, storageLocationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([householdId, id])
+  @@index([householdId, batchId, status])
+  @@index([householdId, imageId])
+  @@index([householdId, storageLocationId])
+  @@index([householdId, storagePositionId])
+}
+
+/// 家庭ごとの写真取込の設定（#10）。
+///
+/// 行が無い家庭は`DEFAULT_INTAKE_SETTINGS`（`src/lib/intake/settings.ts`）で動く。
+/// **スキーマの`@default`とコードの既定値は別々に書いてあるので、片方だけ変えないこと**
+/// （`ExpirySetting`・`DisasterPlanSetting`と同じ約束）。
+model IntakeSetting {
+  id          String @id @default(cuid())
+  householdId String @unique
+
+  /// 画像を何日保存するか。**0は「保存しない」**（抽出が終わった時点で中身を消す）。
+  imageRetentionDays Int @default(30)
+
+  /// 登録済みの商品名の一覧をモデルへ一緒に送るか。表記ゆれを既存商品へ寄せやすくなるが、
+  /// 家庭の持ち物がモデルへ渡るため**既定はオフ**（明示設定なしに送る範囲を広げない）。
+  sendProductNames Boolean @default(false)
+
+  /// 月あたりの上限。0は「上限なし」。
+  monthlyRequestLimit Int     @default(100)
+  monthlyCostLimitYen Decimal @default(1000) @db.Decimal(10, 2)
+  /// 上限に達したら抽出を止めるか。止まっている間も手入力での登録は使える。
+  stopOnLimit         Boolean @default(true)
+
+  /// 使うモデルid。空なら環境変数の既定（`STOCKLY_AI_MODEL`）を使う。
+  model String @default("") @db.VarChar(60)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, id])
 }
