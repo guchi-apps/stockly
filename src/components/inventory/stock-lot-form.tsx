@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SourceChip } from "@/components/inventory/source-chip";
 import type { CandidateSource, CandidateSources } from "@/lib/barcode/candidate";
 import { EXPIRY_KINDS, EXPIRY_KIND_LABELS, hasExpiryDate } from "@/lib/inventory/operations";
-import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
+import { UNIT_DEFINITIONS, canConvert, type UnitCode } from "@/lib/inventory/units";
 
 /**
  * 在庫の登録・編集フォーム。
@@ -53,7 +53,7 @@ export function StockLotForm({
   submitLabel,
   cancelHref,
   hidden = {},
-  lockUnit = false,
+  restrictUnitTo,
   amountHint,
   sources = {},
   beforeFields,
@@ -66,7 +66,11 @@ export function StockLotForm({
   submitLabel: string;
   cancelHref: string;
   hidden?: Record<string, string>;
-  lockUnit?: boolean;
+  /**
+   * 指定すると、この単位から換算できる単位だけを選べるようにする（#56）。編集画面が
+   * ロットの現在の単位を渡す。省略時（登録画面）はすべての単位から選べる。
+   */
+  restrictUnitTo?: UnitCode;
   amountHint?: string;
   /** 欄ごとの候補の出所。バーコードから開いたときだけ渡る。 */
   sources?: CandidateSources;
@@ -89,6 +93,14 @@ export function StockLotForm({
   const [expiryKind, setExpiryKind] = useState(
     () => state.values.expiryKind ?? initial.expiryKind ?? "UNKNOWN",
   );
+
+  // 年月のみ（日を指定しない）で入力するか。送信し直された値（`YYYY-MM`）はそのまま引き継ぎ、
+  // 保存済みの日付が「その月の最終日」と一致する場合も既定でONにする（#55）。年月のみで
+  // 登録したものは必ず月末日として保存されるため、編集し直すときに日を打ち直さずに済む。
+  const [monthOnly, setMonthOnly] = useState(() => {
+    const raw = value("expiryDate");
+    return isMonthOnlyValue(raw) || isEndOfMonthValue(raw);
+  });
 
   return (
     <form action={formAction} className="flex flex-1 flex-col">
@@ -159,23 +171,26 @@ export function StockLotForm({
             />
           </Field>
 
-          <Field label="単位" error={state.errors.unit} htmlFor="unit" source={sources.unit}>
-            {lockUnit ? (
-              <>
-                <input type="hidden" name="unit" value={value("unit", "PIECE")} />
-                <p className="border-input flex h-11 items-center rounded-lg border px-3 text-base">
-                  {UNIT_DEFINITIONS[value("unit", "PIECE") as keyof typeof UNIT_DEFINITIONS]?.label}
-                </p>
-              </>
-            ) : (
-              <NativeSelect id="unit" name="unit" defaultValue={value("unit", "PIECE")}>
-                {Object.entries(UNIT_DEFINITIONS).map(([code, definition]) => (
+          <Field
+            label="単位"
+            error={state.errors.unit}
+            htmlFor="unit"
+            source={sources.unit}
+            hint={
+              restrictUnitTo
+                ? "換算できる単位だけ選べます。まったく違う単位に直したいときは、取り消してから登録し直してください。"
+                : undefined
+            }
+          >
+            <NativeSelect id="unit" name="unit" defaultValue={value("unit", "PIECE")}>
+              {Object.entries(UNIT_DEFINITIONS)
+                .filter(([code]) => !restrictUnitTo || canConvert(restrictUnitTo, code as UnitCode))
+                .map(([code, definition]) => (
                   <option key={code} value={code}>
                     {definition.label}
                   </option>
                 ))}
-              </NativeSelect>
-            )}
+            </NativeSelect>
           </Field>
         </div>
 
@@ -260,15 +275,29 @@ export function StockLotForm({
             error={state.errors.expiryDate}
             htmlFor="expiryDate"
             source={sources.expiryDate}
+            hint={monthOnly ? "日は入力した月の最終日として保存します。" : undefined}
           >
             <Input
               id="expiryDate"
               name="expiryDate"
-              type="date"
-              defaultValue={value("expiryDate")}
+              type={monthOnly ? "month" : "date"}
+              key={monthOnly ? "month" : "date"}
+              defaultValue={
+                monthOnly ? toMonthInputValue(value("expiryDate")) : toDateInputValue(value("expiryDate"))
+              }
               disabled={!hasExpiryDate(expiryKind as (typeof EXPIRY_KINDS)[number])}
               className="h-11 text-base"
             />
+            <label className="text-muted-foreground flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={monthOnly}
+                onChange={(event) => setMonthOnly(event.target.checked)}
+                disabled={!hasExpiryDate(expiryKind as (typeof EXPIRY_KINDS)[number])}
+                className="size-3.5"
+              />
+              年月のみ（日を指定しない）
+            </label>
           </Field>
         </div>
 
@@ -347,4 +376,34 @@ function NativeSelect(props: React.ComponentProps<"select">) {
       className="border-input bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-11 w-full rounded-lg border px-3 text-base transition-[color,box-shadow] outline-none focus-visible:ring-3 disabled:opacity-50"
     />
   );
+}
+
+// ---------------------------------------------------------------------------
+// 年月のみの期限入力（#55）
+// ---------------------------------------------------------------------------
+
+/** `<input type="month">`がそのまま送ってくる形（`YYYY-MM`）か。 */
+function isMonthOnlyValue(value: string): boolean {
+  return /^\d{4}-\d{2}$/.test(value);
+}
+
+/** 保存済みの`YYYY-MM-DD`が、その月の最終日と一致するか。 */
+function isEndOfMonthValue(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const [, year, month, day] = match;
+  const lastDay = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
+  return Number(day) === lastDay;
+}
+
+/** `type="month"`の`defaultValue`用に`YYYY-MM`へ揃える。読めない値は空にする。 */
+function toMonthInputValue(raw: string): string {
+  if (isMonthOnlyValue(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw.slice(0, 7);
+  return "";
+}
+
+/** `type="date"`の`defaultValue`用。`YYYY-MM-DD`以外は空にする（年月のみの値を持ち越さない）。 */
+function toDateInputValue(raw: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "";
 }

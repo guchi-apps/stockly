@@ -25,6 +25,7 @@ import {
   applyRecordToLot,
   formatQuantityWithUnit,
   nextLotStatus,
+  resolveUnitChangeAdjustment,
   signedDelta,
   type ExpiryKind,
   type ProductDisasterFormValue,
@@ -122,7 +123,7 @@ async function loadLotForUpdate(
       unit: true,
       openedAt: true,
       updatedAt: true,
-      product: { select: { name: true, brand: true, categoryId: true } },
+      product: { select: { name: true, brand: true, categoryId: true, defaultUnit: true } },
     },
   });
   if (!lot) throw new InventoryNotFoundError("この在庫は見つかりませんでした。");
@@ -483,6 +484,7 @@ export interface UpdateStockLotParams {
   readonly productName: string;
   readonly categoryName: string | null;
   readonly amount: Decimal;
+  readonly unit: UnitCode;
   readonly storageLocationId: string | null;
   readonly storagePositionId: string | null;
   readonly expiryKind: ExpiryKind;
@@ -494,8 +496,12 @@ export interface UpdateStockLotParams {
 /**
  * 在庫の内容を編集する。
  *
- * 数量が変わった場合は、直接書き換えず「訂正（ADJUST）」を1件積んで差分を反映する。
- * 数量以外（保管場所・期限・メモ）は履歴に残さない。
+ * 数量・単位が変わった場合は、直接書き換えず「訂正（ADJUST）」を1件積んで差分を反映する
+ * （#56）。単位を変えたときの差分は、**現在数量を新しい単位へ換算した値と、入力された数量の差**
+ * で求める（`resolveUnitChangeAdjustment()`。換算後の値が小数3桁に収まらない場合は拒否する）。
+ * 「kgのつもりでgを選んでしまった」のような登録ミスの訂正を想定しており、数量欄の数字自体は
+ * 入力されたとおり正しい前提で扱う（自動では換算しない）。数量・単位以外（保管場所・期限・メモ）は
+ * 履歴に残さない。
  *
  * 商品名・カテゴリの変更は、ロットの参照先を別の商品へ付け替えるのではなく、
  * **商品そのものの名前を直す**。付け替えると、すでに積んだ履歴の`productId`だけが
@@ -520,12 +526,24 @@ export async function updateStockLot(
       const lot = await loadLotForUpdate(tx, householdId, params.lotId);
       assertNotStale(lot.updatedAt, params.expectedUpdatedAt, lot.quantity, lot.unit);
 
-      if (params.productName !== lot.product.name || categoryId !== lot.product.categoryId) {
+      // 訂正の差分を先に確かめる（単位が同じなら換算は素通りする。DBに収まらない換算は
+      // 書き込む前にここで拒否する）。
+      const adjustment = resolveUnitChangeAdjustment(
+        quantity(lot.quantity, lot.unit),
+        params.unit,
+        params.amount,
+      );
+
+      const productChanges: { name?: string; categoryId?: string | null; defaultUnit?: UnitCode } = {};
+      if (params.productName !== lot.product.name) productChanges.name = params.productName;
+      if (categoryId !== lot.product.categoryId) productChanges.categoryId = categoryId;
+      // 単位を明示的に変えたときだけ商品マスタへ書き戻す。ロットの単位を触っていない保存で
+      // `Product.defaultUnit`を見て判定すると、別のロットで学習した既定単位が
+      // このロットの（変えていない）単位へ巻き戻ってしまう（計画レビューでの指摘）。
+      if (params.unit !== lot.unit) productChanges.defaultUnit = params.unit;
+      if (Object.keys(productChanges).length > 0) {
         try {
-          await tx.product.update({
-            where: { id: lot.productId },
-            data: { name: params.productName, categoryId },
-          });
+          await tx.product.update({ where: { id: lot.productId }, data: productChanges });
         } catch (error) {
           if (!isUniqueViolation(error)) throw error;
           throw new InventoryInputError(
@@ -535,8 +553,7 @@ export async function updateStockLot(
         }
       }
 
-      const difference = params.amount.sub(new Decimal(lot.quantity));
-      if (!difference.isZero()) {
+      if (adjustment !== null) {
         await tx.inventoryTransaction.create({
           data: {
             id: params.operationId,
@@ -545,19 +562,20 @@ export async function updateStockLot(
             productId: lot.productId,
             memberId,
             type: "ADJUST",
-            quantityDelta: difference,
-            unit: lot.unit,
+            quantityDelta: adjustment,
+            unit: params.unit,
             occurredAt: new Date(),
             note: "編集画面での訂正",
           },
         });
       }
 
-      const next = quantity(params.amount, lot.unit);
+      const next = quantity(params.amount, params.unit);
       await tx.stockLot.update({
         where: { id: lot.id },
         data: {
           quantity: params.amount,
+          unit: params.unit,
           status: nextLotStatus(next, "ADJUST"),
           storageLocationId: params.storageLocationId,
           storagePositionId: params.storagePositionId,
@@ -576,9 +594,7 @@ export async function updateStockLot(
 
       // 編集で直した値も「前回の確定」として覚え直す。登録のときだけ覚えると、
       // 「登録してすぐ直した」場合に古いほうが候補として残り続ける。
-      // カテゴリは上の`product.update()`が正本（Product）へ直しており、ここでは覚え直さない。
-      // 単位は編集画面では変えられない（ロットの単位のまま）ので、覚え直す対象にしない——
-      // 古いロットを開いて保存しただけで、学習した既定の単位が巻き戻ってしまう。
+      // カテゴリ・単位は上の`product.update()`が正本（Product）へ直しており、ここでは覚え直さない。
       await rememberProductRule(tx, householdId, lot.productId, {
         storageLocationId: params.storageLocationId,
         storagePositionId: params.storagePositionId,

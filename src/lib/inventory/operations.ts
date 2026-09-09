@@ -17,6 +17,7 @@ import {
   Decimal,
   UNIT_DEFINITIONS,
   canConvert,
+  convertQuantity,
   quantity,
   type Quantity,
   type UnitCode,
@@ -152,10 +153,27 @@ export function parseRecordableType(
   return found;
 }
 
-/** `YYYY-MM-DD`をUTCの0時として読む。時差でカレンダー上の日付がずれないようにする。 */
+/**
+ * `YYYY-MM-DD`をUTCの0時として読む。時差でカレンダー上の日付がずれないようにする。
+ *
+ * `YYYY-MM`（年月のみ）も受け付け、その場合は**その月の最終日**を返す（#55）。飲料など
+ * パッケージに年月表記しかない商品向けに、`<input type="month">`から送られてくる値を読む。
+ */
 export function parseDate(raw: string | undefined | null, field: string): Date | null {
   const value = (raw ?? "").trim();
   if (value === "") return null;
+
+  const monthOnlyMatch = /^(\d{4})-(\d{2})$/.exec(value);
+  if (monthOnlyMatch) {
+    const [, year, month] = monthOnlyMatch;
+    const monthNumber = Number(month);
+    if (monthNumber < 1 || monthNumber > 12) {
+      throw new InventoryInputError(field, "存在しない年月です。");
+    }
+    // `Date.UTC`の月は0始まりのため、`monthNumber`をそのまま渡すと翌月扱いになり、
+    // 日を0にすることでその前日＝指定した月の最終日が返る。
+    return new Date(Date.UTC(Number(year), monthNumber, 0));
+  }
 
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) {
@@ -221,6 +239,52 @@ export function applyRecordToLot(
     );
   }
   return next;
+}
+
+/**
+ * ロットの単位を変更する（#56）。
+ *
+ * 「kgのつもりでgを選んでしまった」のような登録ミスの訂正を想定し、換算できる単位
+ * （次元が同じ単位）へだけ変更を許す。個数系（個・パック等）は入数が分からず互いに
+ * 換算できないため、実質「変更できない」（`canConvert()`が同一単位以外false）。
+ * 次元がまったく違う単位への訂正はこの関数の対象外で、取消して登録し直す運用にする。
+ */
+export function convertLotUnit(current: Quantity, targetUnit: UnitCode): Quantity {
+  if (!canConvert(current.unit, targetUnit)) {
+    throw new InventoryInputError(
+      "unit",
+      `単位「${UNIT_DEFINITIONS[current.unit].label}」は「${UNIT_DEFINITIONS[targetUnit].label}」へ変更できません（換算できない単位のため）。`,
+    );
+  }
+  return convertQuantity(current, targetUnit);
+}
+
+/**
+ * 単位を変更したときに積む「訂正（ADJUST）」の差分。変更が無ければ`null`。
+ *
+ * g⇔kg・mL⇔Lは1000倍の換算なので、換算後の現在数量が小数4桁以上になることがある
+ * （`123.456g`→`0.123456kg`）。`StockLot.quantity`・`InventoryTransaction.quantityDelta`は
+ * DBの`Decimal(14,3)`で小数3桁までしか持てないため、収まらない差分を黙って丸めて書き込むと
+ * 丸めた分だけ集計値と履歴が恒久的にずれる（`verifyLotQuantity()`が以後ずっと不一致を検出し続ける）。
+ * 丸めて通す代わりに、収まらない場合はここで拒否する（計画レビューでの指摘）。
+ */
+export function resolveUnitChangeAdjustment(
+  current: Quantity,
+  targetUnit: UnitCode,
+  enteredAmount: Decimal,
+): Decimal | null {
+  const converted = convertLotUnit(current, targetUnit);
+  const difference = enteredAmount.sub(converted.amount);
+  if (difference.isZero()) return null;
+
+  if (difference.decimalPlaces() > QUANTITY_SCALE) {
+    throw new InventoryInputError(
+      "unit",
+      `この単位には現在の数量がちょうど収まりません（小数第${QUANTITY_SCALE}位まで）。` +
+        "数量を先に直すか、この単位への変更をやめてください。",
+    );
+  }
+  return difference;
 }
 
 /**

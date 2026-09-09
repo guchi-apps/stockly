@@ -91,6 +91,10 @@ model Household {
   intakeCandidates  IntakeCandidate[]
   intakeSetting     IntakeSetting?
 
+  // 写真からの減算候補（#11）。
+  consumptionScans     ConsumptionScan[]
+  consumptionScanItems ConsumptionScanItem[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -384,6 +388,8 @@ model Product {
   category     Category?              @relation(fields: [householdId, categoryId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   aliases      ProductAlias[]
   barcodes     Barcode[]
+  /// 写真からの減算候補が指した商品（#11）。
+  consumptionScanItems ConsumptionScanItem[]
   /// バーコードから呼び出す候補の最優先の材料（#9）。商品1つにつき0件か1件。
   rule         ProductRule?
   stockLots    StockLot[]
@@ -589,6 +595,8 @@ model StockLot {
   /// 詳細位置は「同じ家庭の、指定した保管場所の配下」に限る。
   storagePosition StoragePosition?       @relation(fields: [householdId, storageLocationId, storagePositionId], references: [householdId, storageLocationId, id], onDelete: Restrict, onUpdate: Restrict)
   transactions    InventoryTransaction[]
+  /// 写真からの減算候補が対象にしたロット（#11）。
+  consumptionScanItems ConsumptionScanItem[]
 
   @@unique([householdId, id])
   @@index([householdId, productId, status])
@@ -630,6 +638,8 @@ model InventoryTransaction {
   member     HouseholdMember?      @relation(fields: [householdId, memberId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   reverses   InventoryTransaction? @relation("TransactionReversal", fields: [householdId, reversesTransactionId], references: [householdId, id], onDelete: Restrict, onUpdate: Restrict)
   reversedBy InventoryTransaction? @relation("TransactionReversal")
+  /// この履歴を作った写真の候補（#11）。0件か1件。
+  consumptionScanItems ConsumptionScanItem[]
 
   @@unique([householdId, id])
   /// 1件のtransactionを二重に取り消せないようにする。
@@ -1191,4 +1201,151 @@ model IntakeSetting {
   household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
 
   @@unique([householdId, id])
+}
+
+// ===========================================================================
+// 写真からの減算候補（#11）
+// ===========================================================================
+
+/// 何を撮った写真か。**減らす量の出し方がこれで変わる**ため、利用者に選ばせて記録する
+/// （src/lib/consumption/matching.ts の proposeAmount()）。
+enum ConsumptionScanKind {
+  EMPTY_CONTAINER // 空き容器。写っている容器のぶんだけ使い切ったとみなす
+  REMAINING // 残量。容器に残っている割合から、減った量を出す
+  SHELF // 棚。写っている個数と記録の差を減った量とする
+}
+
+enum ConsumptionScanStatus {
+  READY // 候補を出せた（候補0件も含む）
+  FAILED // 解析できなかった。理由をerrorに残し、手入力へ戻れるようにする
+}
+
+/// 候補1件が、いまどうなっているか。**既定はPENDINGで、確定するのは人が押したときだけ。**
+enum ConsumptionCandidateStatus {
+  PENDING // まだ人が見ていない
+  CONFIRMED // 人が確定した（消費のtransactionを1件作った）
+  REJECTED // 人が却下した。在庫は動かない
+}
+
+/// 在庫と結び付けられず、減算の候補にしなかった理由（#11の受入条件「根拠と除外理由」）。
+///
+/// **件数だけでなく理由を必ず画面へ出す。** 「見落とした」のか「安全側に倒して数えなかった」のかが
+/// 読み分けられないと、写真を撮り直すべきかどうかを判断できない。
+enum ConsumptionSkipReason {
+  NO_PRODUCT // 写っているものから商品を特定できなかった
+  NO_STOCK // 商品は分かったが、その商品の在庫が無い（**自動で登録も減算もしない**）
+  NO_AMOUNT // 減らす量を決められなかった（写真から数が読めない・複数在庫がある等）
+  UNIT_MISMATCH // ロットの単位へ換算できない（1本あたりの内容量が未登録など）
+}
+
+/// 写真1回ぶんの解析（#11）。
+///
+/// **画像そのものは持たない。** 減らす写真は「飲み終わった容器」のように後から見返す意味が薄く、
+/// 保存すると#10の保存期間・削除の設定をこちらにも通す必要が出る。ここには「同じ画像かどうか」を
+/// 見分けるための指紋（SHA-256）だけを残す。`@@unique([householdId, imageFingerprint])`があるため、
+/// **同じ写真を送り直しても解析は1回だけ**で、2回目は前回の候補をそのまま返す（受入条件の「画像再送」）。
+///
+/// トークン数と概算費用を持つのは、**#10と同じ月あたりの上限（`IntakeSetting`）で数えるため**
+/// （`src/lib/intake/queries.ts`の`readMonthlyUsage()`が両方を合算する）。AIの費用の歯止めを
+/// 機能ごとに分けると、片方だけ設定して安心する形になる。
+model ConsumptionScan {
+  id          String                @id @default(cuid())
+  householdId String
+  kind        ConsumptionScanKind
+  status      ConsumptionScanStatus @default(READY)
+
+  /// 送った画像の指紋（SHA-256のhex）。画像本体は保存しない。
+  imageFingerprint String @db.VarChar(64)
+  /// 送った枚数。費用と「何枚から出した候補か」の説明に使う。
+  imageCount       Int    @default(0)
+
+  /// 実際に候補を出したモデル名と、照合ルールの版。あとから「どの規則で出した候補か」を辿れるようにする
+  /// （#7の`DISASTER_RULE_VERSION`と同じ考え方で、判定結果そのものは保存しない）。
+  model       String @default("") @db.VarChar(80)
+  ruleVersion String @db.VarChar(20)
+
+  /// 使ったトークンと概算費用（円）。**応答が届いた失敗でも記録する**——0にすると、
+  /// 読めない応答が続くあいだ月の上限が効かないまま送り続けることになる（#10と同じ約束）。
+  inputTokens      Int     @default(0)
+  outputTokens     Int     @default(0)
+  estimatedCostYen Decimal @default(0) @db.Decimal(10, 3)
+
+  /// 解析できなかった理由。画面にそのまま出すので、APIキー等を含めない。
+  error String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household Household             @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  items     ConsumptionScanItem[]
+
+  @@unique([householdId, id])
+  @@unique([householdId, imageFingerprint])
+  @@index([householdId, createdAt])
+}
+
+/// 写真から出した候補1件（#11）。
+///
+/// **`skipReason`がnullなら減算の候補、非nullなら「減らさなかったもの」。** 同じ表に置いてあるのは、
+/// どちらも「写真に写っていたもの」で、件数の合計が写真の中身と一致していないと読めなくなるため。
+///
+/// **AIが決めるのは`detectedLabel`・`detectedBarcode`・`aiConfidence`までで、`productId`・`stockLotId`・
+/// `proposedAmount`はサーバー側の純関数が現在庫から決める**（技術上の前提「既知ルールと現在庫をAIより優先する」）。
+model ConsumptionScanItem {
+  id          String @id @default(cuid())
+  householdId String
+  scanId      String
+
+  /// 照合できた商品と、減らす対象のロット。**照合できなければどちらもnullで、そのまま減算はできない。**
+  productId  String?
+  stockLotId String?
+
+  /// 写真から読み取れた表示（商品名らしき文字列）。照合の根拠として画面に出す。
+  detectedLabel   String  @db.VarChar(200)
+  /// 写真から読み取れたバーコード。あれば照合の最優先の手がかりになる。
+  detectedBarcode String? @db.VarChar(64)
+
+  /// 提案する減算量と単位。**確定するまで在庫は動かない。**
+  proposedAmount Decimal?  @db.Decimal(14, 3)
+  unit           UnitCode?
+
+  /// モデルが返した確からしさ（0〜1）と、照合の強さを掛け合わせた最終的な信頼度（0〜1）。
+  /// 画面では%・語・記号の3つで出し、色だけに依存させない（#8の充足率と同じ約束）。
+  aiConfidence Decimal @default(0) @db.Decimal(4, 3)
+  confidence   Decimal @default(0) @db.Decimal(4, 3)
+
+  /// 候補にしなかった理由。nullなら減算の候補。
+  skipReason ConsumptionSkipReason?
+
+  /// なぜこの商品・この量になったのかの根拠（日本語の文字列の配列）。画面にそのまま並べる。
+  evidence Json?
+
+  status ConsumptionCandidateStatus @default(PENDING)
+
+  /// 確定して作った消費の履歴と、そのとき実際に減らした量（提案から直された場合はその値）。
+  /// **取消はこの履歴を既存の履歴画面から取り消すだけ**で、この行に専用の戻し方は持たせない。
+  transactionId   String?
+  confirmedAmount Decimal?  @db.Decimal(14, 3)
+  confirmedAt     DateTime?
+
+  /// 画面に並べる順。信頼度の高い候補から先に見せる。
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  household   Household             @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  scan        ConsumptionScan       @relation(fields: [householdId, scanId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  product     Product?              @relation(fields: [householdId, productId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  stockLot    StockLot?             @relation(fields: [householdId, stockLotId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+  /// 作った履歴への参照。**Restrictにしない**——履歴は消さない運用だが、家庭を消すときに
+  /// 削除の伝播順が保証されず、`Restrict`だと家庭ごと消せなくなる（db-testsで実際に起きた。#13）。
+  transaction InventoryTransaction? @relation(fields: [householdId, transactionId], references: [householdId, id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([householdId, id])
+  /// 1件の履歴を2つの候補が作ったことにしない。
+  @@unique([householdId, transactionId])
+  @@index([householdId, scanId, sortOrder])
+  @@index([householdId, productId])
+  @@index([householdId, stockLotId])
 }
