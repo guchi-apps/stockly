@@ -26,6 +26,7 @@
     "job:expiry": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-expiry-notifications.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
     "@prisma/client": "^6.19.3",
     "@supabase/ssr": "^0.12.6",
     "@supabase/supabase-js": "^2.115.0",

@@ -18,9 +18,17 @@ import type { UnitCode } from "../inventory/units.ts";
 export const CANDIDATE_SOURCES = ["RULE", "BARCODE", "AI"] as const;
 export type CandidateSource = (typeof CANDIDATE_SOURCES)[number];
 
+/**
+ * 画面に出す出所の名前。
+ *
+ * `BARCODE`を「バーコード」ではなく「商品マスタ」と呼ぶ（#10）。#52でカテゴリと単位の正本が
+ * `Product`へ移り、この段が返すのは**商品マスタの値＝その家庭で最後に確定した値**になった。
+ * 写真からの登録候補（#10）はコードを読まずに商品名でマスタを引くため、「バーコード」と出すと
+ * 嘘になる。どちらの画面でも正しい呼び方に揃えてある。
+ */
 export const CANDIDATE_SOURCE_LABELS: Readonly<Record<CandidateSource, string>> = {
   RULE: "前回の確定",
-  BARCODE: "バーコード",
+  BARCODE: "商品マスタ",
   AI: "AI候補",
 };
 

@@ -55,11 +55,14 @@ src/lib/inventory/ 在庫ドメイン。純関数（units・ledger・operations�
 src/lib/replenishment/ 補充ドメイン（#6）。不足量の算出（shortage）・入力の読み取り（rules）と、service・queries
 src/lib/disaster/ 防災ドメイン（#7・#8）。区分と必要量の定義（rules）・判定（assess）と、queries・settings。
                    バッグの点検（bag・bag-queries）は判定を呼ぶだけで、判定ルールを持たない
+src/lib/intake/ 写真からの登録候補（#10）。判定に関わらない純関数（extraction・candidates・image・
+                   config）と、外との通信（client・prompt）、DBを触るservice・queries・settings
 src/lib/notion/    Notion買い物リストへの送信（config・client）。読み取りAPIは使わない
 src/lib/notifications/ 通知（#5）。チャネル境界（channels）・重複防止（service）・期限ジョブ（expiry-job）
 src/lib/time/   日付の境目（tokyo.ts）。期限の「今日」はここだけで決める
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/components/replenishment/ 補充基準のフォーム
+src/components/intake/ 写真取込の部品（アップロード欄・候補カード・確からしさの見せ方・設定フォーム）
 src/components/disaster/ 防災の集計の見せ方（coverage-summary）・基準のフォームと、バッグの点検（bag-inspection・bag-forms）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
@@ -270,10 +273,12 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
 
 ## バーコードと学習ルール（#9）
 
-- **候補の優先順位は「確定済みルール > バーコードマスタ > AI候補」**。組み立てるのは
+- **候補の優先順位は「確定済みルール > 商品マスタ > AI候補」**。組み立てるのは
   `src/lib/barcode/candidate.ts`の`buildStockLotCandidate()`（純関数）で、欄ごとにどれを採ったかを
   一緒に返す。画面はその出所をチップで出す。**強いほうが空でも弱いほうへ落ちるのは値が無いときだけ**で、
-  「新しいほうを採る」といった別の規則を混ぜない
+  「新しいほうを採る」といった別の規則を混ぜない。
+  真ん中の段は`BarcodeMaster`という型名だが、中身は`Product`（#52でカテゴリと単位の正本になった）で、
+  バーコードからも商品名からも引く。そのためチップの表示は「商品マスタ」にしてある（#10）
 - **確定済みルール（`ProductRule`）は商品1つにつき1行。** 在庫を登録・編集して確定するたびに上書きする。
   **期限は日付ではなく日数（`shelfLifeDays`）で覚える**——日付を覚えると、次に買ったときには必ず過ぎている
 - **カテゴリと単位の正本は`Product`（`categoryId`・`defaultUnit`）で、`ProductRule`には持たせない**（#52）。
@@ -298,6 +303,44 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   セッションが切れた瞬間にHTMLが返って`WebAssembly.instantiate`が原因の分かりにくい形で落ちる
 - カメラは**httpsかlocalhostでしか使えない**。LANの生IPで開くと`navigator.mediaDevices`自体が
   生えないため、スマホ実機で試すときは`sslip.io`＋httpsが要る（`sslip-io-lan-dev` skill）
+
+## 写真からの登録候補（#10）
+
+レシート・購入品・期限ラベルの写真をClaude APIに読ませて「登録候補」を作り、**人が確認・修正して
+から**在庫へ反映する。**AIが在庫を動かすことはない。**
+
+- **AIは既知の値を上書きしない。** 欄ごとの優先順位づけは#9の`buildStockLotCandidate()`
+  （確定済みルール > 商品マスタ > AI候補）へそのまま任せ、写真取込の側で別の規則を足さない。
+  **写真から読んだ商品名が既存の商品と一致したら、その商品マスタ（`Product`）も渡す**——
+  #52でカテゴリと既定の単位の正本が`Product`へ移ったため、マスタから採る値が
+  「最後に確定した値」そのものになる。渡さないと確定済みの値を無視してAIの読みを採ってしまう。
+  **この段の表示名は「商品マスタ」**（`CANDIDATE_SOURCE_LABELS`）——写真取込ではコードを
+  読まないので「バーコード」と出すと嘘になる
+- **`buildStockLotCandidate()`へ渡す`today`に`tokyoToday()`を通さない。** あの関数は日付を
+  **UTCの暦日**として扱う約束で、学習ルールへ日数を書く`rememberProductRule()`も同じ数え方をする。
+  片方だけ日本時間に寄せると、**JSTの0時〜9時に取り込んだときだけ期限が1日先になる**
+- **確定済みルールが勝った欄では、採らなかったAIの読みを`evidence`に残す。** 理由を書かないと
+  「読めなかった」のか「読めたが採らなかった」のかを画面から区別できない
+- **モデルの出力をそのままDBへ入れない。** 必ず`extraction.ts`の`parseExtraction()`を通す。
+  知らない欄は落とし、壊れた欄は`null`にして残りを活かす（1行の壊れで7件の候補を全部捨てない）。
+  **`null`は「読めなかった」を意味する**ので、0や空文字で埋めない
+- **画像の形式は申告された`Content-Type`ではなく、中身の先頭バイトで決める**
+  （`image.ts`の`detectImageType()`）。**EXIF等の付帯情報は送る前に落とす**（`stripMetadata()`）。
+  ブラウザ側でcanvasへ描き直せば消えるが、JSが動かなければ元の画像がそのまま届く
+- **二重登録の防止は`@@unique([householdId, sha256])`。** 同じ画像を送り直しても新しい取り込みを
+  作らず、前回の候補へ案内する。**画像の中身を消しても`sha256`は消さない**（消した瞬間から
+  防止が効かなくなる）。反映側の二重送信は、候補の`id`をそのまま
+  `InventoryTransaction.id`に使うことで防ぐ（専用の列を持たない）
+- **確からしさで自動確定しない。** `initialCandidateStatus()`は確からしさを引数に取らない
+  （閾値で確定させる余地を作らないため）。在庫が変わるのは人が「反映する」を押したときだけ
+- **費用の上限はStockly側の歯止め**で、Anthropicの請求を止めるものではない。今月の使用量は
+  専用テーブルを持たず`IntakeBatch`を数えて出す。**応答が届いた失敗でもトークンを記録する**
+  ——0にすると、読めない応答が続くあいだ上限が効かないまま送り続ける
+- **保存期間切れの掃除はcronではなく`/intake`を開いたときに走る**（`purgeExpiredIntakeImages()`）。
+  1家庭あたりの枚数はたかが知れており、掃除のためだけに常駐を増やすほうが割に合わない
+- 接続先は環境変数（`ANTHROPIC_API_KEY`または`ANTHROPIC_AUTH_TOKEN`）。**未設定でも画面は開き、
+  読み取りだけができない**（Notion連携と同じ）。`ANTHROPIC_BASE_URL`でスタブへ向けられるので、
+  実際に流して確かめるときはローカルに数十行のHTTPサーバーを立てる
 
 ## 補充とNotion買い物リスト連携（#6）
 
