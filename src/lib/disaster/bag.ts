@@ -92,7 +92,7 @@ export const BAG_ATTENTION_LABELS: Readonly<Record<BagAttentionKind, string>> = 
   EXPIRED: "期限切れ",
   EXPIRING_SOON: "期限間近",
   UNKNOWN_EXPIRY: "期限が要確認",
-  OPENED: "開封済み",
+  OPENED: "使用中",
   NOT_POSITIVE: "残量なし",
 };
 
@@ -100,7 +100,7 @@ export const BAG_ATTENTION_NOTES: Readonly<Record<BagAttentionKind, string>> = {
   EXPIRED: "入れ替えが要ります",
   EXPIRING_SOON: "そろそろ入れ替えます",
   UNKNOWN_EXPIRY: "期限が空のままです",
-  OPENED: "開封済みなので数えていません",
+  OPENED: "使用中なので数えていません",
   NOT_POSITIVE: "数量が0以下です",
 };
 

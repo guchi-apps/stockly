@@ -189,7 +189,7 @@ export function DisasterPlanSettingsForm({
           <CheckField
             id="includeOpened"
             defaultChecked={checked("includeOpened")}
-            label="開封済み（飲みかけ・使いかけ）の在庫も数える"
+            label="使用中（飲みかけ・使いかけ）の在庫も数える"
             hint="残量と衛生状態が分からないため、既定では数えません。"
           />
           <CheckField

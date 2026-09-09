@@ -4,6 +4,7 @@ import {
   CalendarClock,
   Camera,
   History,
+  ImageMinus,
   LifeBuoy,
   MapPin,
   Menu,
@@ -53,6 +54,13 @@ export const ITEMS = [
     icon: Camera,
     matches: ["/intake"],
     note: "レシート・購入品の写真から候補を作る",
+  },
+  {
+    href: "/inventory/consume",
+    label: "写真で減らす",
+    icon: ImageMinus,
+    matches: ["/inventory/consume"],
+    note: "空き容器・残量・棚の写真から減らす",
   },
   {
     href: "/expiry",

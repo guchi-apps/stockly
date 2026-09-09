@@ -56,13 +56,18 @@ src/lib/replenishment/ 補充ドメイン（#6）。不足量の算出（shortag
 src/lib/disaster/ 防災ドメイン（#7・#8）。区分と必要量の定義（rules）・判定（assess）と、queries・settings。
                    バッグの点検（bag・bag-queries）は判定を呼ぶだけで、判定ルールを持たない
 src/lib/intake/ 写真からの登録候補（#10）。判定に関わらない純関数（extraction・candidates・image・
-                   config）と、外との通信（client・prompt）、DBを触るservice・queries・settings
+                   config）と、外との通信（client・prompt）、DBを触るservice・queries・settings。
+                   **AIの資格情報・モデル・費用の上限はここが正本**で、#11もこれを使う
+src/lib/consumption/ 写真からの減算候補（#11）。写真の種類と指示（kinds）・在庫との照合（matching）・
+                   応答の検証（observations）・画像の検査と指紋（images）はすべて純関数。
+                   外との通信はclient、DBを触るのはservice・queries
 src/lib/notion/    Notion買い物リストへの送信（config・client）。読み取りAPIは使わない
 src/lib/notifications/ 通知（#5）。チャネル境界（channels）・重複防止（service）・期限ジョブ（expiry-job）
 src/lib/time/   日付の境目（tokyo.ts）。期限の「今日」はここだけで決める
 src/components/inventory/ 在庫画面の部品（一覧・期限バッジ・記録ボタン・フォーム）
 src/components/replenishment/ 補充基準のフォーム
 src/components/intake/ 写真取込の部品（アップロード欄・候補カード・確からしさの見せ方・設定フォーム）
+src/components/inventory/consume-photo-input.tsx・consume-candidates.tsx 減らす写真の選択（HEIC変換・縮小）と候補カード
 src/components/disaster/ 防災の集計の見せ方（coverage-summary）・基準のフォームと、バッグの点検（bag-inspection・bag-forms）
 src/lib/supabase/  Supabaseクライアントとセッション更新（middleware.ts）
 prisma/         schema.prisma・migrations・seed.ts（サンプル）・fixtures/（受入条件の確認用データ）
@@ -270,6 +275,32 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   訂正する手段が無くなる
 - 画面の確認用データは`pnpm db:seed:fixture`（`prisma/fixtures/daily-inventory.ts`）。
   流すたびに`fx-`で始まる在庫・履歴を作り直すので、画面で試した記録が残らない
+- **ロットの単位は、換算できる単位（同じ次元）の範囲でだけ編集画面から変更できる**（#56）。
+  「kgのつもりでgを選んでしまった」のような登録ミスの訂正を想定しており、数量欄の数字は
+  入力されたとおり正しい前提で扱う（単位を切り替えても自動では換算しない）。差分は
+  現在数量を新しい単位へ換算した値と入力値の差として求め（`operations.ts`の
+  `resolveUnitChangeAdjustment()`）、既存の「訂正（ADJUST）」としてそのまま履歴に残す。
+  過去の履歴（`InventoryTransaction`）の`unit`は書き換えない——`ledger.ts`の
+  `computeLotQuantity()`が各行をロットの現在単位へ都度換算して合算する設計なので、
+  換算できる単位間の変更なら整合性は自然に保たれる。次元がまったく違う単位への訂正
+  （個数系⇔重さ、等）はこの機能の対象外で、取消して登録し直す運用にする。
+  **g⇔kg・mL⇔Lは1000倍の換算なので、換算後の数量が小数4桁以上になることがある**
+  （`123.456g`→`0.123456kg`）。`quantity`・`quantityDelta`はDBの`Decimal(14,3)`で
+  小数3桁までしか持てないため、`resolveUnitChangeAdjustment()`は収まらない差分を丸めて
+  通さず拒否する（丸めて書き込むと、丸めた分だけ集計値と履歴が恒久的にずれる）。
+  **`Product.defaultUnit`への書き戻しは、ロットの単位を実際に変えたとき（`params.unit !== lot.unit`）
+  だけ行う。** `Product.defaultUnit`そのものと比べると、単位を変えていない編集（名前やカテゴリの
+  訂正だけ）でも「別のロットで学習した既定単位」を巻き戻してしまう（計画レビューでの指摘）
+- **「使用中」（`StockLot.openedAt`）は商品につき常に高々1つになる**（#57）。登録・編集で
+  使用中にチェックすると、同じ商品（`householdId`+`productId`）の他のACTIVEロットの使用中を
+  同一トランザクション内で自動的に解除する（`service.ts`の`closeOtherOpenLots()`）。
+  排他の単位は保管場所をまたいだ「商品」で、既存データへは遡及しない（今後の保存経路でのみ収束する）。
+  **`openedAt`は表示用の値ではなく、防災の除外判定（`disaster/assess.ts`）と写真からの減算候補が
+  優先して選ぶロット（`consumption/matching.ts`の`selectLot()`）の両方から読まれる。**
+  自動解除で他のロットの`openedAt`が消えると、そのロットに実際は中身が残っていても防災判定では
+  「安全な満量」として数えてしまう可能性がある（過大評価側に倒れる）。#57ではこの副作用を
+  受け入れる方針で実装した（起票者に確認済み）が、**この列に新しい判定を足すときは、
+  「使用中の自動解除」で値が消えうることを前提にする**
 
 ## バーコードと学習ルール（#9）
 
@@ -341,6 +372,51 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
 - 接続先は環境変数（`ANTHROPIC_API_KEY`または`ANTHROPIC_AUTH_TOKEN`）。**未設定でも画面は開き、
   読み取りだけができない**（Notion連携と同じ）。`ANTHROPIC_BASE_URL`でスタブへ向けられるので、
   実際に流して確かめるときはローカルに数十行のHTTPサーバーを立てる
+
+## 写真からの減算候補（#11）
+
+空き容器・残量・棚の写真から「減らす候補」を出し、**1件ずつ人が確かめてから**消費として記録する
+（`/inventory/consume`）。**AIの資格情報・モデルの選択・費用の上限は写真取込（#10）と共通**で、
+`src/lib/intake/`の`config.ts`・`settings.ts`・`image.ts`をそのまま使う。#11が持つのは
+「何を読ませるか」（`observations.ts`）と「読んだものを在庫とどう照らすか」（`matching.ts`）だけ。
+
+- **AIが決めるのは「写真に何が見えたか」までで、商品も数量も決めさせない。** モデルには
+  読み取れた表示・バーコード・見えた個数・残量の割合だけを返させ、**どの商品のどのロットを
+  いくつ減らすかは`matching.ts`の純関数がその家庭の在庫だけを材料に決める。**
+  これが技術上の前提「既知ルールと現在庫をAIより優先する」の実体で、
+  **在庫に無いものは候補にならない**（受入条件「存在しない商品を自動減算しない」）
+- **解析と確定を別の関数・別のServer Actionに分ける。** `analyzeConsumptionPhotos()`は在庫を
+  一切触らず、在庫が動くのは`confirmConsumptionCandidate()`だけ。画面にも**まとめ確定のボタンを
+  置かない**（受入条件「AIが自動確定する経路を持たない」を、呼び出しの形からも保つ）
+- **照合の優先順位はバーコード > 商品名の完全一致 > 別名 > 部分一致**で、重みが信頼度に掛かる
+  （1.0 / 0.9 / 0.85 / 0.6）。`src/lib/barcode/candidate.ts`と同じく、**強いほうが常に勝ち、
+  「新しいほうを採る」のような別の規則を混ぜない**
+- **減らす量を決められないときは0や1で埋めず、理由付きで候補から外す。** 誤減算の影響が大きく、
+  「とりあえず1」が積み上がると在庫の数字そのものが信用できなくなる。理由は
+  `ConsumptionSkipReason`（商品が特定できない・在庫が無い・量を決められない・単位を換算できない）
+- **残量の写真は、在庫が容器1つぶんを超えていたら使わない。** 写真は容器1つの残量なので、
+  未開封が別にあるロットでは全体を説明できない（安全側へ倒す）。棚の写真から数えられるのは
+  個数で数える在庫だけで、容量の在庫は`Product.contentAmount`を通してしか換算しない
+- **確定した候補はふつうの消費（`CONSUME`）として履歴に積む。** 専用の取消は作らず、
+  取り消しは既存の履歴画面から行う。二重確定は`recordTransaction()`の操作IDと、
+  `@@unique([householdId, transactionId])`の両方で止める
+- **減らす写真は保存せず、指紋（SHA-256）だけを残す。** 飲み終わった容器の写真は後から見返す
+  意味が薄く、保存すると#10の保存期間・削除の設定をこちらにも通すことになる。
+  `@@unique([householdId, imageFingerprint])`が「同じ写真を送り直しても解析は1回だけ」を担保する
+  （2回目はモデルを呼ばずに前回の候補を返す）。指紋には写真の種類も混ぜる——同じ写真でも
+  種類が違えば減らす量の出し方が変わるため
+- **費用の上限は#10と同じ枠で数える。** `src/lib/intake/queries.ts`の`readMonthlyUsage()`が
+  `IntakeBatch`と`ConsumptionScan`を**合算**し、`IntakeSetting`の月あたりの回数・金額で止める。
+  **AIへ写真を送る機能を足したら`readMonthlyUsage()`にも足すこと**——足し忘れると、その機能だけが
+  上限の外で動く。**応答が届いた失敗ではトークンも記録する**（0にすると、読めない応答が続くあいだ
+  上限が効かない）
+- **HEICはサーバーで受け取らない。** ブラウザ側でcanvasへ描き直してJPEGにしてから送る
+  （`consume-photo-input.tsx`。描き直した時点でメタデータが落ちるので、変換がEXIF除去も兼ねる）。
+  **フォームはサーバーコンポーネントのままにしてあり**、変換した結果は`DataTransfer`で同じ
+  `<input type="file">`へ書き戻す（送信の経路を2つに分けない。JSが無くても送れ、`curl`でも叩ける）
+- **照合の規則を変えたら`CONSUMPTION_RULE_VERSION`を上げる**（文言や並び順だけの変更では上げない）。
+  #7と同じく判定結果は保存せず、「同じ入力なら同じ結果」＋「根拠と除外理由を画面に出す」で
+  後から再説明できるようにしている
 
 ## 補充とNotion買い物リスト連携（#6）
 
@@ -523,6 +599,11 @@ OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純
   画面から呼ぶ読み取り（`inbox.ts`）は`scopeToHousehold()`を通す通常の画面用モジュール
 - 送り先は`STOCKLY_NOTIFY_CHANNELS`（既定は`IN_APP`）。メール・LINE等の外部サービスは未実装で、
   追加にはユーザー確認が要る。**定期実行（cron）の登録はVPS側の手作業**で、このリポジトリには入っていない
+  （crontabの実体は`guchi-apps/vps`の`cron/crontab.txt`。変更はそちらへIssueを立てる。#43）
+- **`run-expiry-notifications.ts`は`.env`（本番）・`.env.local`（開発）のどちらでも動くよう、
+  dotenvへ配列で両方渡している。** cronはPM2を介さず`node`を直接起動するため、Next.js本体と違って
+  `.env`が自動では読まれない。`.env.local`だけを対象にしていた時期は、本番で`cd <配置先> &&
+  pnpm job:expiry`を実行すると`DATABASE_URL`が見つからず落ちていた（#43で確認・修正）
 
 ## 認証と家庭の境界
 
