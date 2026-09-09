@@ -67,6 +67,33 @@ describe("parseDate", () => {
   it("存在しない日付を拒否する", () => {
     assert.throws(() => parseDate("2026-02-30", "expiryDate"), InventoryInputError);
   });
+
+  it("YYYY-MM（年月のみ）は、その月の最終日として読む", () => {
+    assert.equal(parseDate("2026-09", "expiryDate")?.toISOString(), "2026-09-30T00:00:00.000Z");
+  });
+
+  it("年月のみでも、うるう年の2月は29日まで正しく数える", () => {
+    assert.equal(parseDate("2024-02", "expiryDate")?.toISOString(), "2024-02-29T00:00:00.000Z");
+    assert.equal(parseDate("2026-02", "expiryDate")?.toISOString(), "2026-02-28T00:00:00.000Z");
+  });
+
+  it("年月のみは、時差の影響を受けないUTCの暦で月末を数える（30日・31日の月）", () => {
+    // JSTのローカル時刻で `new Date(year, month, 0)` のように組むと、
+    // UTCの日付が1日手前にずれる（計画レビューでの指摘）。`Date.UTC`基準であることを固定する。
+    assert.equal(
+      parseDate("2026-04", "expiryDate")?.toISOString(),
+      new Date(Date.UTC(2026, 3, 30)).toISOString(),
+    );
+    assert.equal(
+      parseDate("2026-12", "expiryDate")?.toISOString(),
+      new Date(Date.UTC(2026, 11, 31)).toISOString(),
+    );
+  });
+
+  it("存在しない月（年月のみ）を拒否する", () => {
+    assert.throws(() => parseDate("2026-13", "expiryDate"), InventoryInputError);
+    assert.throws(() => parseDate("2026-00", "expiryDate"), InventoryInputError);
+  });
 });
 
 describe("parseOperationId", () => {
@@ -296,6 +323,13 @@ describe("parseStockLotForm", () => {
 
     assert.ok(!result.ok);
     assert.match(result.errors.expiryDate, /日付/);
+  });
+
+  it("期限を年月のみ（YYYY-MM）で入力したら、その月の最終日として保存する", () => {
+    const result = parseStockLotForm({ ...base, expiryDate: "2026-09" });
+
+    assert.ok(result.ok);
+    assert.equal(result.value.expiryDate?.toISOString(), "2026-09-30T00:00:00.000Z");
   });
 
   it("期限なしを選んだら日付は捨てる", () => {
