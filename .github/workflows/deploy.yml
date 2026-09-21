@@ -164,7 +164,7 @@ jobs:
             deploy \
             scripts/construct-database-url.sh \
             scripts/update-env-file.sh \
-            next.config.ts
+            next.config.mjs
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -269,7 +269,8 @@ jobs:
 
             echo "Cleaning up old release files..."
             # 配布物を増やしたらこの行にも足す。永続させたいディレクトリは絶対に入れない。
-            rm -rf package.json pnpm-lock.yaml public .next prisma deploy next.config.ts
+            # next.config.ts は .mjs へ移す前の名前。本番に残っている古い方を消すため並べておく。
+            rm -rf package.json pnpm-lock.yaml public .next prisma deploy next.config.mjs next.config.ts
 
             echo "Extracting archive..."
             tar -xzf deploy.tar.gz
