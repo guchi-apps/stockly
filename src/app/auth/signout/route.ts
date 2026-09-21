@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { DEV_LOGIN_COOKIE_NAME } from "@/lib/auth/dev-login";
+import { signOutFromThisApp } from "@/lib/auth/sign-out";
 import { getRequestOrigin } from "@/lib/request-origin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -13,7 +14,7 @@ import { createClient } from "@/lib/supabase/server";
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
 
-  const { error } = await supabase.auth.signOut();
+  const { error } = await signOutFromThisApp(supabase);
   if (error) {
     console.error("[stockly] ログアウトに失敗:", error.message);
   }

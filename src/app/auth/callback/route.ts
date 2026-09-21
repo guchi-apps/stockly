@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { isAllowedEmail } from "@/lib/auth/allowed-emails";
 import { resolveInternalPath } from "@/lib/auth/internal-path";
+import { signOutFromThisApp } from "@/lib/auth/sign-out";
 import { ensureStocklyUser } from "@/lib/household/provisioning";
 import { getRequestOrigin } from "@/lib/request-origin";
 import { createClient } from "@/lib/supabase/server";
@@ -35,7 +36,9 @@ export async function GET(request: NextRequest) {
   const { user } = data;
 
   if (!isAllowedEmail(user.email)) {
-    await supabase.auth.signOut();
+    // 許可外のユーザーでも、同じアカウントで他アプリにログインしているかもしれない。
+    // このアプリのセッションだけを捨てる（globalだと他アプリまで失効する）。
+    await signOutFromThisApp(supabase);
     return NextResponse.redirect(`${origin}/login?error=not_allowed`);
   }
 
