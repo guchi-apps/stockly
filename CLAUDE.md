@@ -617,6 +617,11 @@ OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純
 - 在庫を扱うクエリは`src/lib/household/access.ts`の`scopeToHousehold()`を通す。画面ごとに
   `where: { householdId }`を手で書かない（1か所の書き忘れがそのまま越境になる）
 - ログイン後の戻り先は`resolveInternalPath()`で正規化する（open redirectの防止）
+- **`supabase.auth.signOut()`を直接呼ばず、`src/lib/auth/sign-out.ts`の`signOutFromThisApp()`を通す**（#86）。
+  引数なしの`signOut()`は`scope: "global"`で、共有のSupabaseプロジェクトを使う**他アプリ・他端末の
+  refresh tokenまで失効させる**。この関数は`scope: "local"`に固定してあり、`sign-out.test.ts`が
+  `src`配下の直接呼びを検出する。アカウント自体を消す機能を足すときだけ、全セッションを終了する
+  意図（`scope: "global"`）を専用の関数にして`sign-out.ts`へ置く（このテストの対象外になる）
 - **自分のオリジンは`getRequestOrigin()`だけで組み、`X-Forwarded-Proto`を鵜呑みにしない**（#34）。
   certbotは`:80`のVirtualHostを丸ごと`:443`へ複製するため、TLSを終端していても
   `RequestHeader set X-Forwarded-Proto "http"`が残ることがある。ヘッダーどおりに組むと
