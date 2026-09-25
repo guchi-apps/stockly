@@ -611,7 +611,10 @@ OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純
   画面・APIでは`supabase.auth.getUser()`を呼ばず、`src/lib/auth/current-user.ts`の`getCurrentUser()`
   等を使う。`getUser()`は毎回Supabaseへ往復するため、呼び直すと待ち時間が倍になる
 - 検証済みのユーザーIDは`x-stockly-supabase-user-id`ヘッダーで後段へ渡す。proxyが必ず上書きか削除を
-  するので詐称は届かないが、**proxyのmatcherから外したパスではこの前提が崩れる**
+  するので詐称は届かないが、**proxyのmatcherから外したパスではこの前提が崩れる**。
+  **matcherから外すのは実在する公開ファイルの完全一致だけ**で、拡張子（`.png`等）での一括除外は
+  しない（`/inventory/x.png`のような動的ルートが外れ、ヘッダーを詐称できた。#103）。
+  外すファイルを足すときは`src/proxy-matcher.test.ts`にも足す
 - **利用可否は`ALLOWED_GOOGLE_EMAILS`で判定する**（`src/lib/auth/allowed-emails.ts`）。共有のSupabase
   プロジェクトを他アプリと使っているため、認証できることと利用してよいことは別。未設定時は全員拒否
 - 在庫を扱うクエリは`src/lib/household/access.ts`の`scopeToHousehold()`を通す。画面ごとに
