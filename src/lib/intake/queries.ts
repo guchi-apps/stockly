@@ -14,6 +14,7 @@ import { householdMembershipStore } from "@/lib/household/store";
 import type { InventoryContext } from "../inventory/service.ts";
 import { tokyoMonthRange } from "../time/tokyo.ts";
 
+import { isRetryableBatch } from "./retry.ts";
 import { readIntakeSettings, type IntakeSettings } from "./settings.ts";
 
 async function scope(ctx: InventoryContext): Promise<string> {
@@ -139,12 +140,36 @@ export async function getIntakeImageData(ctx: InventoryContext, imageId: string)
 export async function findBatchIdByImageHash(
   householdId: string,
   sha256: string,
-): Promise<string | null> {
+  now: Date = new Date(),
+): Promise<{ batchId: string; imageId: string; retryable: boolean } | null> {
   const row = await db.intakeImage.findUnique({
     where: { householdId_sha256: { householdId, sha256 } },
-    select: { batchId: true },
+    select: {
+      id: true,
+      batchId: true,
+      batch: {
+        select: {
+          status: true,
+          createdAt: true,
+          candidates: { where: { status: "APPLIED" }, select: { id: true }, take: 1 },
+        },
+      },
+    },
   });
-  return row?.batchId ?? null;
+  if (!row) return null;
+  return {
+    batchId: row.batchId,
+    imageId: row.id,
+    // **失敗・中断した取り込みは重複として扱わない**（#105）。扱うと、その写真は二度と読ませられない。
+    retryable: isRetryableBatch(
+      {
+        status: row.batch.status,
+        createdAt: row.batch.createdAt,
+        hasAppliedCandidate: row.batch.candidates.length > 0,
+      },
+      now,
+    ),
+  };
 }
 
 export interface MonthlyUsage {
