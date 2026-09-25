@@ -43,6 +43,7 @@ import {
 } from "./config.ts";
 import { INTAKE_PROMPT_VERSION, type ExtractedItem } from "./extraction.ts";
 import type { IntakeImageKind } from "./prompt.ts";
+import { releasedKey } from "./retry.ts";
 import { findBatchIdByImageHash, readMonthlyUsage } from "./queries.ts";
 import { readIntakeSettings, resolveModel, type IntakeSettings } from "./settings.ts";
 
@@ -103,9 +104,15 @@ export async function createIntakeBatch(
   await assertWithinLimits(householdId, settings, now);
 
   // 1枚でも取り込み済みの画像があれば、そこで止めて前回の取り込みへ返す。
+  // **ただし失敗・中断した取り込みは重複にしない**（#105）。その画像行は、新しい取り込みを作る
+  // トランザクションの中で一意キーを手放させる（行は残す。使用量の集計が数えているため）。
+  const released: { id: string; sha256: string }[] = [];
   for (const image of images) {
-    const existing = await findBatchIdByImageHash(householdId, sha256(image.bytes));
-    if (existing) return { status: "duplicate", batchId: existing };
+    const hash = sha256(image.bytes);
+    const existing = await findBatchIdByImageHash(householdId, hash, now);
+    if (!existing) continue;
+    if (!existing.retryable) return { status: "duplicate", batchId: existing.batchId };
+    released.push({ id: existing.imageId, sha256: hash });
   }
 
   const model = resolveModel(settings, config.defaultModel);
@@ -120,6 +127,13 @@ export async function createIntakeBatch(
   // 入れ子の中では自分で決める列とみなす（`Unknown argument householdId`で落ちる）。
   // 取り込みと画像を1つのトランザクションで作り、画像のidを並び順で受け取る。
   const batch = await db.$transaction(async (tx) => {
+    for (const row of released) {
+      await tx.intakeImage.update({
+        where: { id: row.id },
+        data: { sha256: releasedKey(row.sha256, row.id) },
+      });
+    }
+
     const created = await tx.intakeBatch.create({
       data: {
         householdId,
@@ -203,7 +217,8 @@ export async function createIntakeBatch(
           : {}),
       },
     });
-    // **画像の記録は残す。** 消すと、同じ写真を送り直すたびに同じ失敗を繰り返すことになる。
+    // **画像の記録は残す**（使用量の集計が取り込みを数える）。同じ写真を送り直したときは
+    // `isRetryableBatch()`が再読み取りへ回すので、この失敗が写真を塞ぐことはない。
     await purgeIfNotRetained(householdId, batch.id, settings, now);
     return { status: "failed", batchId: batch.id, message };
   }

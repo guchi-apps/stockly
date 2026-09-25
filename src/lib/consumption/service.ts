@@ -20,6 +20,7 @@ import { scopeToHousehold } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
 import { readIntakeConfig } from "@/lib/intake/config";
 import { readMonthlyUsage } from "@/lib/intake/queries";
+import { isRetryableScan, releasedKey } from "@/lib/intake/retry";
 import { readIntakeSettings, resolveModel, type IntakeSettings } from "@/lib/intake/settings";
 import { InventoryInputError } from "@/lib/inventory/operations";
 import {
@@ -95,11 +96,32 @@ export async function analyzeConsumptionPhotos(
 
   // 同じ写真の送り直しは、モデルを呼ばずに前回の結果を返す（費用も候補も二重にしない）。
   const fingerprint = fingerprintImages(images, params.kind);
+  // **失敗・中断した解析は重複にしない**（#105）。再利用し続けると、その写真は二度と読ませられない。
+  // 古い行は残し（使用量の集計が数える）、指紋だけ手放して新しい解析を作る。
+  const now = new Date();
   const existing = await db.consumptionScan.findFirst({
     where: { householdId, imageFingerprint: fingerprint },
-    select: { id: true, status: true, error: true },
+    select: {
+      id: true,
+      status: true,
+      error: true,
+      createdAt: true,
+      inputTokens: true,
+      _count: { select: { items: true } },
+    },
   });
-  if (existing) {
+  const releasing =
+    existing &&
+    isRetryableScan(
+      {
+        status: existing.status,
+        createdAt: existing.createdAt,
+        itemCount: existing._count.items,
+        inputTokens: existing.inputTokens,
+      },
+      now,
+    );
+  if (existing && !releasing) {
     const counts = await countItems(householdId, existing.id);
     return {
       scanId: existing.id,
@@ -114,18 +136,25 @@ export async function analyzeConsumptionPhotos(
   await assertWithinLimits(householdId, settings);
   const model = resolveModel(settings, config.defaultModel);
 
-  const scan = await db.consumptionScan.create({
-    data: {
-      householdId,
-      kind: params.kind,
-      status: "READY",
-      imageFingerprint: fingerprint,
-      imageCount: images.length,
-      model,
-      ruleVersion: CONSUMPTION_RULE_VERSION,
-    },
-    select: { id: true },
-  });
+  const scanData = {
+    householdId,
+    kind: params.kind,
+    status: "READY" as const,
+    imageFingerprint: fingerprint,
+    imageCount: images.length,
+    model,
+    ruleVersion: CONSUMPTION_RULE_VERSION,
+  };
+  const scan =
+    existing && releasing
+      ? await db.$transaction(async (tx) => {
+          await tx.consumptionScan.update({
+            where: { id: existing.id },
+            data: { imageFingerprint: releasedKey(fingerprint, existing.id) },
+          });
+          return tx.consumptionScan.create({ data: scanData, select: { id: true } });
+        })
+      : await db.consumptionScan.create({ data: scanData, select: { id: true } });
 
   // --- ここから外との通信。DBのトランザクションの外で行う ---
   let observations;
