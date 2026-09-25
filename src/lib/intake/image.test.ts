@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { InventoryInputError } from "../inventory/operations.ts";
 import { detectImageType, stripMetadata } from "./image.ts";
 
 const JPEG_SOI = [0xff, 0xd8];
@@ -100,9 +101,27 @@ describe("stripMetadata: JPEG", () => {
     assert.deepEqual([...stripMetadata(input, "image/jpeg")], [...input]);
   });
 
-  it("読み解けない並びは元のまま返す（欠けた画像を作らない）", () => {
+  it("読み解けない並びは元のまま通さず拒否する（EXIFが残ったまま送らない）", () => {
     const broken = bytes(...JPEG_SOI, 0x12, 0x34, 0x56);
-    assert.deepEqual([...stripMetadata(broken, "image/jpeg")], [...broken]);
+    assert.throws(() => stripMetadata(broken, "image/jpeg"), InventoryInputError);
+  });
+
+  it("マーカーの前の0xFF埋め草を読み飛ばし、そのあとのEXIFも落とす", () => {
+    const exif = jpegSegment(0xe1, [0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0x99, 0x99]);
+    const scan = [0xff, 0xda, 0x00, 0x03, 0xaa, 0xbb, 0xcc];
+    const input = bytes(...JPEG_SOI, 0xff, 0xff, ...exif, ...scan);
+    const output = stripMetadata(input, "image/jpeg");
+    assert.deepEqual([...output], [...bytes(...JPEG_SOI, ...scan)]);
+  });
+
+  it("長さ欄が壊れている（残りより長い）JPEGは拒否する", () => {
+    const input = bytes(...JPEG_SOI, 0xff, 0xe1, 0xff, 0xff, 0x45, 0x78);
+    assert.throws(() => stripMetadata(input, "image/jpeg"), InventoryInputError);
+  });
+
+  it("SOSに辿り着かずに終わるJPEGは拒否する", () => {
+    const input = bytes(...JPEG_SOI, ...jpegSegment(0xdb, [0x01, 0x02]));
+    assert.throws(() => stripMetadata(input, "image/jpeg"), InventoryInputError);
   });
 });
 
@@ -122,6 +141,13 @@ describe("stripMetadata: PNG", () => {
   it("落とすものが無ければ内容は変わらない", () => {
     const input = bytes(...PNG_SIGNATURE, ...pngChunk("IHDR", [1]), ...pngChunk("IEND", []));
     assert.deepEqual([...stripMetadata(input, "image/png")], [...input]);
+  });
+});
+
+describe("stripMetadata: PNG（壊れた入力）", () => {
+  it("チャンクの長さが壊れていれば拒否する", () => {
+    const input = bytes(...PNG_SIGNATURE, 0x7f, 0xff, 0xff, 0xff, 0x65, 0x58, 0x49, 0x66, 0, 0, 0, 0);
+    assert.throws(() => stripMetadata(input, "image/png"), InventoryInputError);
   });
 });
 

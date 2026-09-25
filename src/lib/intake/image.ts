@@ -13,6 +13,7 @@
  * ここにはPrismaもNext.jsも持ち込まない（DBの無いCIで判定そのものを試せるようにするため。
  * `image.test.ts`）。
  */
+import { InventoryInputError } from "../inventory/operations.ts";
 
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];
@@ -45,8 +46,9 @@ export function detectImageType(bytes: Uint8Array): ImageType | null {
  * 付帯情報（EXIF・XMP・コメント）を落とした画像を返す。
  *
  * **画素は触らない。** 再エンコードすると文字が潰れて読み取りに響くため、
- * 付帯情報のかたまりだけを取り除く。壊れていて読み解けない画像は、そのまま返す
- * （送るのを止めるほどではなく、モデル側が受け付けなければそこで失敗する）。
+ * 付帯情報のかたまりだけを取り除く。**壊れていて読み解けない画像は、そのまま返さず拒否する**
+ * （`InventoryInputError`）。元の画像を返すと、APP1（EXIF・GPS）が残ったまま保存・送信される。
+ * 失敗したときに付帯情報を通す側へ倒さない。
  */
 export function stripMetadata(bytes: Uint8Array, type: ImageType): Uint8Array {
   switch (type) {
@@ -65,14 +67,34 @@ export function stripMetadata(bytes: Uint8Array, type: ImageType): Uint8Array {
  * APP0（JFIF）は解像度の宣言なので残す。EXIFはAPP1に入っており、GPSもそこにある。
  * 画像そのもの（SOS以降）には触らない。
  */
+function unreadable(): never {
+  throw new InventoryInputError(
+    "images",
+    "写真の付帯情報を確認できなかったため取り込めませんでした。撮り直すか、別の写真を選んでください。",
+  );
+}
+
 function stripJpegSegments(bytes: Uint8Array): Uint8Array {
   const keep: Uint8Array[] = [];
   let offset = 2; // SOI（FF D8）
   keep.push(bytes.subarray(0, 2));
 
-  while (offset + 4 <= bytes.length) {
-    if (bytes[offset] !== 0xff) break; // マーカーが並んでいない＝読み解けない
+  while (offset + 2 <= bytes.length) {
+    if (bytes[offset] !== 0xff) unreadable(); // マーカーが並んでいない＝読み解けない
     const marker = bytes[offset + 1];
+
+    // マーカーの前の0xFFは埋め草として何個あってもよい（仕様上許される）。
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
+    // 長さ欄を持たないマーカー（TEM・RSTn）。SOSより前には通常現れないが、そのまま残す。
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      keep.push(bytes.subarray(offset, offset + 2));
+      offset += 2;
+      continue;
+    }
+    if (offset + 4 > bytes.length) unreadable();
 
     // SOS（FF DA）以降は画像データ本体。ここから先はそのまま通す。
     if (marker === 0xda) {
@@ -81,7 +103,7 @@ function stripJpegSegments(bytes: Uint8Array): Uint8Array {
     }
 
     const length = (bytes[offset + 2] << 8) | bytes[offset + 3];
-    if (length < 2 || offset + 2 + length > bytes.length) break;
+    if (length < 2 || offset + 2 + length > bytes.length) unreadable();
 
     const isAppExceptJfif = marker >= 0xe1 && marker <= 0xef;
     const isComment = marker === 0xfe;
@@ -91,8 +113,8 @@ function stripJpegSegments(bytes: Uint8Array): Uint8Array {
     offset += 2 + length;
   }
 
-  // 途中で読み解けなくなったら、元の画像をそのまま使う（欠けたJPEGを作らない）。
-  return bytes;
+  // SOSに辿り着く前に終わった（読み解けない）。
+  return unreadable();
 }
 
 /** PNGの補助チャンク（eXIf・tEXt・iTXt・zTXt）を落とす。 */
@@ -104,7 +126,7 @@ function stripPngChunks(bytes: Uint8Array): Uint8Array {
   while (offset + 8 <= bytes.length) {
     const length =
       (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
-    if (length < 0 || offset + 12 + length > bytes.length) return bytes;
+    if (length < 0 || offset + 12 + length > bytes.length) unreadable();
 
     const name = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
     if (!drop.has(name)) keep.push(bytes.subarray(offset, offset + 12 + length));
@@ -112,7 +134,7 @@ function stripPngChunks(bytes: Uint8Array): Uint8Array {
     offset += 12 + length;
     if (name === "IEND") return concat(keep);
   }
-  return bytes;
+  return unreadable();
 }
 
 /** WebP（RIFF）のEXIF・XMPチャンクを落とす。 */
@@ -128,10 +150,10 @@ function stripWebpChunks(bytes: Uint8Array): Uint8Array {
       (bytes[offset + 5] << 8) |
       (bytes[offset + 6] << 16) |
       (bytes[offset + 7] << 24);
-    if (size < 0) return bytes;
+    if (size < 0) unreadable();
     // RIFFのチャンクは偶数バイトに揃える。
     const padded = size + (size % 2);
-    if (offset + 8 + padded > bytes.length) return bytes;
+    if (offset + 8 + padded > bytes.length) unreadable();
 
     const name = String.fromCharCode(...bytes.subarray(offset, offset + 4));
     if (drop.has(name)) dropped = true;
