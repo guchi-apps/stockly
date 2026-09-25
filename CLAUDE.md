@@ -362,6 +362,10 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   作らず、前回の候補へ案内する。**画像の中身を消しても`sha256`は消さない**（消した瞬間から
   防止が効かなくなる）。反映側の二重送信は、候補の`id`をそのまま
   `InventoryTransaction.id`に使うことで防ぐ（専用の列を持たない）
+- **失敗・中断した取り込みは「重複」にしない**（#105）。`retry.ts`の`isRetryableBatch()`が、`FAILED`・
+  10分を過ぎた`EXTRACTING`・反映済み候補の無い`DISCARDED`を再読み取りの対象にする。古い行は消さず
+  （使用量の集計が数える）、画像の`sha256`だけ`releasedKey()`で手放して新しい取り込みを作る。
+  減算側（#11）の指紋も同じ形
 - **確からしさで自動確定しない。** `initialCandidateStatus()`は確からしさを引数に取らない
   （閾値で確定させる余地を作らないため）。在庫が変わるのは人が「反映する」を押したときだけ
 - **費用の上限はStockly側の歯止め**で、Anthropicの請求を止めるものではない。今月の使用量は
@@ -398,8 +402,9 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   未開封が別にあるロットでは全体を説明できない（安全側へ倒す）。棚の写真から数えられるのは
   個数で数える在庫だけで、容量の在庫は`Product.contentAmount`を通してしか換算しない
 - **確定した候補はふつうの消費（`CONSUME`）として履歴に積む。** 専用の取消は作らず、
-  取り消しは既存の履歴画面から行う。二重確定は`recordTransaction()`の操作IDと、
-  `@@unique([householdId, transactionId])`の両方で止める
+  取り消しは既存の履歴画面から行う。**操作IDは候補のid**（描画ごとの
+  `newOperationId()`にしない。端末ごとに別のIDになり、別の端末から同時に確定すると2回減る）。
+  2件目は`InventoryTransaction.id`の主キー重複で`duplicate`になる。却下済みの候補は確定できない
 - **減らす写真は保存せず、指紋（SHA-256）だけを残す。** 飲み終わった容器の写真は後から見返す
   意味が薄く、保存すると#10の保存期間・削除の設定をこちらにも通すことになる。
   `@@unique([householdId, imageFingerprint])`が「同じ写真を送り直しても解析は1回だけ」を担保する
@@ -611,9 +616,17 @@ OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純
   画面・APIでは`supabase.auth.getUser()`を呼ばず、`src/lib/auth/current-user.ts`の`getCurrentUser()`
   等を使う。`getUser()`は毎回Supabaseへ往復するため、呼び直すと待ち時間が倍になる
 - 検証済みのユーザーIDは`x-stockly-supabase-user-id`ヘッダーで後段へ渡す。proxyが必ず上書きか削除を
-  するので詐称は届かないが、**proxyのmatcherから外したパスではこの前提が崩れる**
+  するので詐称は届かないが、**proxyのmatcherから外したパスではこの前提が崩れる**。
+  **matcherから外すのは実在する公開ファイルの完全一致だけ**で、拡張子（`.png`等）での一括除外は
+  しない（`/inventory/x.png`のような動的ルートが外れ、ヘッダーを詐称できた。#103）。
+  外すファイルを足すときは`src/proxy-matcher.test.ts`にも足す
 - **利用可否は`ALLOWED_GOOGLE_EMAILS`で判定する**（`src/lib/auth/allowed-emails.ts`）。共有のSupabase
   プロジェクトを他アプリと使っているため、認証できることと利用してよいことは別。未設定時は全員拒否
+- **許可リストの判定はOAuthコールバックだけでなく、proxy（`middleware.ts`）が毎リクエスト行う**（#107）。
+  コールバックだけだと、リストから外してもrefresh tokenで延長され続けるセッションで在庫を読み書きできる。
+  外れたアカウントは未ログイン扱いにし（このアプリのセッションだけ`scope: "local"`で破棄）、`/login?error=not_allowed`へ戻す。
+  `getCurrentUser()`側には判定を足さない（ユーザーのメールはDBの控えで、Supabaseの値とずれうる。
+  また、proxyで弾かないと`/login`↔`/`の往復になる）
 - 在庫を扱うクエリは`src/lib/household/access.ts`の`scopeToHousehold()`を通す。画面ごとに
   `where: { householdId }`を手で書かない（1か所の書き忘れがそのまま越境になる）
 - ログイン後の戻り先は`resolveInternalPath()`で正規化する（open redirectの防止）

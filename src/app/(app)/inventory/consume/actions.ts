@@ -18,7 +18,7 @@ import {
   rejectConsumptionCandidate,
 } from "@/lib/consumption/service";
 import { requireInventoryContextForAction } from "@/lib/inventory/context";
-import { parseAmount, parseOperationId } from "@/lib/inventory/operations";
+import { parseAmount } from "@/lib/inventory/operations";
 
 const PAGE = "/inventory/consume";
 
@@ -87,7 +87,6 @@ export async function confirmConsumptionCandidateAction(formData: FormData): Pro
     const raw = str(formData, "amount");
     const result = await confirmConsumptionCandidate(ctx, {
       itemId: str(formData, "itemId"),
-      operationId: parseOperationId(str(formData, "operationId")),
       amount: raw === "" ? null : parseAmount(raw, "amount", "減らす量"),
     });
 

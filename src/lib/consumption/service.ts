@@ -20,6 +20,7 @@ import { scopeToHousehold } from "@/lib/household/access";
 import { householdMembershipStore } from "@/lib/household/store";
 import { readIntakeConfig } from "@/lib/intake/config";
 import { readMonthlyUsage } from "@/lib/intake/queries";
+import { isRetryableScan, releasedKey } from "@/lib/intake/retry";
 import { readIntakeSettings, resolveModel, type IntakeSettings } from "@/lib/intake/settings";
 import { InventoryInputError } from "@/lib/inventory/operations";
 import {
@@ -95,11 +96,32 @@ export async function analyzeConsumptionPhotos(
 
   // 同じ写真の送り直しは、モデルを呼ばずに前回の結果を返す（費用も候補も二重にしない）。
   const fingerprint = fingerprintImages(images, params.kind);
+  // **失敗・中断した解析は重複にしない**（#105）。再利用し続けると、その写真は二度と読ませられない。
+  // 古い行は残し（使用量の集計が数える）、指紋だけ手放して新しい解析を作る。
+  const now = new Date();
   const existing = await db.consumptionScan.findFirst({
     where: { householdId, imageFingerprint: fingerprint },
-    select: { id: true, status: true, error: true },
+    select: {
+      id: true,
+      status: true,
+      error: true,
+      createdAt: true,
+      inputTokens: true,
+      _count: { select: { items: true } },
+    },
   });
-  if (existing) {
+  const releasing =
+    existing &&
+    isRetryableScan(
+      {
+        status: existing.status,
+        createdAt: existing.createdAt,
+        itemCount: existing._count.items,
+        inputTokens: existing.inputTokens,
+      },
+      now,
+    );
+  if (existing && !releasing) {
     const counts = await countItems(householdId, existing.id);
     return {
       scanId: existing.id,
@@ -114,18 +136,25 @@ export async function analyzeConsumptionPhotos(
   await assertWithinLimits(householdId, settings);
   const model = resolveModel(settings, config.defaultModel);
 
-  const scan = await db.consumptionScan.create({
-    data: {
-      householdId,
-      kind: params.kind,
-      status: "READY",
-      imageFingerprint: fingerprint,
-      imageCount: images.length,
-      model,
-      ruleVersion: CONSUMPTION_RULE_VERSION,
-    },
-    select: { id: true },
-  });
+  const scanData = {
+    householdId,
+    kind: params.kind,
+    status: "READY" as const,
+    imageFingerprint: fingerprint,
+    imageCount: images.length,
+    model,
+    ruleVersion: CONSUMPTION_RULE_VERSION,
+  };
+  const scan =
+    existing && releasing
+      ? await db.$transaction(async (tx) => {
+          await tx.consumptionScan.update({
+            where: { id: existing.id },
+            data: { imageFingerprint: releasedKey(fingerprint, existing.id) },
+          });
+          return tx.consumptionScan.create({ data: scanData, select: { id: true } });
+        })
+      : await db.consumptionScan.create({ data: scanData, select: { id: true } });
 
   // --- ここから外との通信。DBのトランザクションの外で行う ---
   let observations;
@@ -223,12 +252,13 @@ export async function analyzeConsumptionPhotos(
  * 候補を1件確定し、消費として記録する。
  *
  * 数量は画面から渡された値を使う（**修正できることが受入条件**）。渡されなければ提案のまま。
- * 二重送信は`recordTransaction()`と同じ操作IDの仕組みで止まり、加えて確定済みの候補は
- * ここで弾く（画面を2つ開いていても、1つの候補から履歴が2件できない）。
+ * **操作IDには候補のidをそのまま使う**（#10の反映と同じ）。別の端末・タブから同時に確定しても
+ * `InventoryTransaction.id`の主キーが重複するので、履歴は1件しかできない（2件目は`duplicate`）。
+ * 描画ごとに操作IDを発行すると、端末ごとに別のIDになって在庫が2回減る。
  */
 export async function confirmConsumptionCandidate(
   ctx: InventoryContext,
-  params: { itemId: string; operationId: string; amount?: Decimal | null },
+  params: { itemId: string; amount?: Decimal | null },
 ): Promise<{ status: RecordStatus | "already-confirmed"; lotId: string | null }> {
   const householdId = await scope(ctx);
 
@@ -249,6 +279,10 @@ export async function confirmConsumptionCandidate(
   if (item.status === "CONFIRMED") {
     return { status: "already-confirmed", lotId: item.stockLotId };
   }
+  if (item.status === "REJECTED") {
+    // 他の端末で却下済み。減らすと在庫は動くのに候補は「却下」のまま残る。
+    throw new InventoryNotFoundError("この候補はすでに却下されています。");
+  }
   if (item.skipReason !== null || item.stockLotId === null || item.unit === null) {
     // 在庫と結び付いていないものは、この画面からは減らせない（受入条件「存在しない商品を自動減算しない」）。
     throw new InventoryInputError(
@@ -263,7 +297,7 @@ export async function confirmConsumptionCandidate(
   }
 
   const result = await recordTransaction(ctx, {
-    operationId: params.operationId,
+    operationId: item.id,
     lotId: item.stockLotId,
     type: "CONSUME",
     amount,
@@ -271,8 +305,9 @@ export async function confirmConsumptionCandidate(
     note: `写真から確認して記録（${item.detectedLabel}）`,
   });
 
+  // 記録のあとに他の端末で却下されていても、在庫は動いたので確定として揃える（PENDING以外でも上書き）。
   await db.consumptionScanItem.updateMany({
-    where: { id: item.id, householdId, status: "PENDING" },
+    where: { id: item.id, householdId, status: { not: "CONFIRMED" } },
     data: {
       status: "CONFIRMED",
       transactionId: result.transactionId,

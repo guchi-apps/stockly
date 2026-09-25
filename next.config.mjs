@@ -12,6 +12,18 @@ const nextConfig = {
   // IPがそのままラベルになる（192.168.2.114.sslip.io）ため、"*.sslip.io" では一致せず、
   // devサーバーがJSチャンクをブロックしてハイドレーションが完了しなくなる。
   allowedDevOrigins: ["**.sslip.io"],
+
+  experimental: {
+    serverActions: {
+      // Server Actionの本文上限は既定で1MB。超えるとアクションに届く前に拒否され、service.tsの
+      // 枚数・サイズ検証（分かりやすいエラー）まで処理が届かない。写真取込（createIntakeAction）と
+      // 減算（analyzeConsumptionPhotosAction）は src/lib/intake/config.ts の
+      // MAX_IMAGES_PER_BATCH(5) × MAX_IMAGE_BYTES(10MB) = 50MB まで受けるので、multipartの
+      // 枠ぶんを足して60MBにする。.mjsからは.tsをimportできないため数値を直書きしている。
+      // 上の2定数を変えたらここも直す。
+      bodySizeLimit: "60mb",
+    },
+  },
 };
 
 export default nextConfig;
