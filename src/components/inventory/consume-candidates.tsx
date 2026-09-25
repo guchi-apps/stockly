@@ -20,7 +20,6 @@ import {
   type ConfidenceLevel,
 } from "@/lib/consumption/matching";
 import { formatAmount, resolveExpiry } from "@/lib/inventory/operations";
-import { newOperationId } from "@/lib/inventory/service";
 import { UNIT_DEFINITIONS } from "@/lib/inventory/units";
 
 /**
@@ -149,7 +148,6 @@ export function ConsumeCandidateCard({
       <div className="bg-muted/50 flex shrink-0 flex-col gap-2 border-t px-4 py-3 md:w-56 md:border-t-0 md:border-l">
         <form action={confirmConsumptionCandidateAction} className="flex flex-col gap-2">
           <input type="hidden" name="itemId" value={item.id} />
-          <input type="hidden" name="operationId" value={newOperationId()} />
           <input type="hidden" name="redirectTo" value={redirectTo} />
 
           <label className="text-muted-foreground text-[11px] font-bold" htmlFor={`amount-${item.id}`}>
