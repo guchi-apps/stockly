@@ -1,8 +1,10 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { isAllowedEmail } from "@/lib/auth/allowed-emails";
 import { SUPABASE_USER_ID_HEADER } from "@/lib/auth/auth-header";
 import { DEV_LOGIN_COOKIE_NAME, resolveDevLoginUserId } from "@/lib/auth/dev-login";
+import { signOutFromThisApp } from "@/lib/auth/sign-out";
 import { getRequestOrigin } from "@/lib/request-origin";
 
 /** ログインしていなくても通すパス。ここ以外はすべて認証が要る。 */
@@ -69,9 +71,23 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
   // `getUser()`はSupabaseへ往復してトークンを検証する。届かなかったときの戻り値は未ログインと
   // 同じ`user: null`なので、errorを見ないと「セッションが無い」と「今は確認できない」を取り違える。
   const {
-    data: { user },
+    data: { user: sessionUser },
     error,
   } = await supabase.auth.getUser();
+
+  // **許可リスト（`ALLOWED_GOOGLE_EMAILS`）から外れたアカウントは、有効なセッションを持っていても
+  // 未ログインとして扱う**（#107）。判定がOAuthのコールバックにしか無いと、外したあともrefresh tokenで
+  // 延長され続けるセッションで在庫を読み書きできてしまう。環境変数の比較だけなので追加の往復は無い。
+  // ここで弾けば`/login`↔`/`の往復にもならない（`/login`は「ログイン済みなら`/`へ」の分岐より前に
+  // 未ログインになる）。他アプリのセッションを巻き込まないよう、捨てるのはこのアプリの分だけ。
+  const notAllowed = sessionUser !== null && !isAllowedEmail(sessionUser.email);
+  if (notAllowed) {
+    const { error: signOutError } = await signOutFromThisApp(supabase);
+    if (signOutError) {
+      console.error("[stockly] 許可外アカウントのセッション破棄に失敗:", signOutError.message);
+    }
+  }
+  const user = notAllowed ? null : sessionUser;
 
   const withRefreshedCookies = <T extends NextResponse>(response: T): T => {
     refreshedCookies.forEach(({ name, value, options }) =>
@@ -123,6 +139,7 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
     const loginUrl = new URL("/login", getRequestOrigin(request));
     // 戻り先はパスだけを渡す。オリジンごと渡すと、そのまま外部URLを差し込まれうる。
     loginUrl.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
+    if (notAllowed) loginUrl.searchParams.set("error", "not_allowed");
     return withRefreshedCookies(NextResponse.redirect(loginUrl));
   }
 

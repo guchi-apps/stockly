@@ -622,6 +622,11 @@ OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純
   外すファイルを足すときは`src/proxy-matcher.test.ts`にも足す
 - **利用可否は`ALLOWED_GOOGLE_EMAILS`で判定する**（`src/lib/auth/allowed-emails.ts`）。共有のSupabase
   プロジェクトを他アプリと使っているため、認証できることと利用してよいことは別。未設定時は全員拒否
+- **許可リストの判定はOAuthコールバックだけでなく、proxy（`middleware.ts`）が毎リクエスト行う**（#107）。
+  コールバックだけだと、リストから外してもrefresh tokenで延長され続けるセッションで在庫を読み書きできる。
+  外れたアカウントは未ログイン扱いにし（このアプリのセッションだけ`scope: "local"`で破棄）、`/login?error=not_allowed`へ戻す。
+  `getCurrentUser()`側には判定を足さない（ユーザーのメールはDBの控えで、Supabaseの値とずれうる。
+  また、proxyで弾かないと`/login`↔`/`の往復になる）
 - 在庫を扱うクエリは`src/lib/household/access.ts`の`scopeToHousehold()`を通す。画面ごとに
   `where: { householdId }`を手で書かない（1か所の書き忘れがそのまま越境になる）
 - ログイン後の戻り先は`resolveInternalPath()`で正規化する（open redirectの防止）
