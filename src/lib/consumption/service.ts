@@ -252,12 +252,13 @@ export async function analyzeConsumptionPhotos(
  * 候補を1件確定し、消費として記録する。
  *
  * 数量は画面から渡された値を使う（**修正できることが受入条件**）。渡されなければ提案のまま。
- * 二重送信は`recordTransaction()`と同じ操作IDの仕組みで止まり、加えて確定済みの候補は
- * ここで弾く（画面を2つ開いていても、1つの候補から履歴が2件できない）。
+ * **操作IDには候補のidをそのまま使う**（#10の反映と同じ）。別の端末・タブから同時に確定しても
+ * `InventoryTransaction.id`の主キーが重複するので、履歴は1件しかできない（2件目は`duplicate`）。
+ * 描画ごとに操作IDを発行すると、端末ごとに別のIDになって在庫が2回減る。
  */
 export async function confirmConsumptionCandidate(
   ctx: InventoryContext,
-  params: { itemId: string; operationId: string; amount?: Decimal | null },
+  params: { itemId: string; amount?: Decimal | null },
 ): Promise<{ status: RecordStatus | "already-confirmed"; lotId: string | null }> {
   const householdId = await scope(ctx);
 
@@ -278,6 +279,10 @@ export async function confirmConsumptionCandidate(
   if (item.status === "CONFIRMED") {
     return { status: "already-confirmed", lotId: item.stockLotId };
   }
+  if (item.status === "REJECTED") {
+    // 他の端末で却下済み。減らすと在庫は動くのに候補は「却下」のまま残る。
+    throw new InventoryNotFoundError("この候補はすでに却下されています。");
+  }
   if (item.skipReason !== null || item.stockLotId === null || item.unit === null) {
     // 在庫と結び付いていないものは、この画面からは減らせない（受入条件「存在しない商品を自動減算しない」）。
     throw new InventoryInputError(
@@ -292,7 +297,7 @@ export async function confirmConsumptionCandidate(
   }
 
   const result = await recordTransaction(ctx, {
-    operationId: params.operationId,
+    operationId: item.id,
     lotId: item.stockLotId,
     type: "CONSUME",
     amount,
@@ -300,8 +305,9 @@ export async function confirmConsumptionCandidate(
     note: `写真から確認して記録（${item.detectedLabel}）`,
   });
 
+  // 記録のあとに他の端末で却下されていても、在庫は動いたので確定として揃える（PENDING以外でも上書き）。
   await db.consumptionScanItem.updateMany({
-    where: { id: item.id, householdId, status: "PENDING" },
+    where: { id: item.id, householdId, status: { not: "CONFIRMED" } },
     data: {
       status: "CONFIRMED",
       transactionId: result.transactionId,
