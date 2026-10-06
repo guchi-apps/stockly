@@ -36,6 +36,14 @@ model User {
 
   /// Supabase Authのユーザーid（`auth.users.id`のUUID）。認証との唯一の接点。
   supabaseUserId String  @unique
+
+  /// GoogleアカウントのID（OpenID Connectの`sub`）。Supabaseのユーザーが作り直されて
+  /// `supabaseUserId`が変わっても同じ本人を見分けるための不変の識別子（#134）。
+  /// Supabaseが`auth.identities`に記録した値だけを入れ、`user_metadata`・メールからは埋めない。
+  /// この列を入れる前から居る利用者は、次にログインしたときに埋まるまで`null`。
+  googleSubject  String? @unique
+
+  /// 表示用の控え。**本人の照合には使わない**（一意でなく、メール一致だけでは同じ本人と言えない。#134）。
   email          String?
   name           String?
   imageUrl       String? @db.Text
