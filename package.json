@@ -1,6 +1,6 @@
 {
   "name": "stockly",
-  "version": "1.2.13",
+  "version": "1.2.14",
   "private": true,
   "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
   "scripts": {
@@ -23,6 +23,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
+    "auth:account-links": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/account-links.ts",
     "job:expiry": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-expiry-notifications.ts"
   },
   "dependencies": {

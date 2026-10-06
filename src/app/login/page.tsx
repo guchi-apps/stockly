@@ -8,6 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 const ERROR_MESSAGES: Record<string, string> = {
   auth_failed: "ログインに失敗しました。もう一度お試しください。",
   not_allowed: "このGoogleアカウントではStocklyを利用できません。",
+  // 認証idが変わった可能性があり、既存のデータと自動では結びつけられなかった（#134）。
+  // 新しい家庭は作っていないので、データが消えたわけではないことを伝える。
+  account_recovery:
+    "以前のStocklyのデータとこのアカウントを自動で結びつけられませんでした。データは消えていません。管理者に連絡し、アカウントの復旧を依頼してください。",
 };
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
