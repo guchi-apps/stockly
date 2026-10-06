@@ -23,6 +23,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
+    "auth:account-links": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/account-links.ts",
     "job:expiry": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-expiry-notifications.ts"
   },
   "dependencies": {

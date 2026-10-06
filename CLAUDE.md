@@ -47,7 +47,8 @@ src/app/        App Routerのページ・レイアウト。manifest.ts・icon.sv
 src/app/(app)/  在庫・期限・履歴・補充・防災・保管場所・メニューの画面とServer Action（actions.ts）。共通の外枠はlayout.tsx
 src/proxy.ts    全リクエストの入口（Next.js 16では旧middleware.ts）。認証の判定はここだけ
 src/components/ 再利用UI。ui/はshadcn/uiが生成したもので、手で書いたものと混ぜない
-src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン）
+src/lib/auth/   認証まわり（許可メール・戻り先の正規化・現在ユーザー・開発用ログイン・
+                   本人の照合（account-link）と人が行う復旧（account-recovery）。#134）
 src/lib/household/ 家庭の境界。在庫を扱うクエリは必ずaccess.tsを通す。
                    共有（#12）は members（役割・招待の純関数）・service（招待/除名/役割変更）・
                    queries（メンバー一覧）。所属を引くのは store.ts の2つのクエリだけ
@@ -627,6 +628,15 @@ OWNERだけに限ることだけ。判定は`src/lib/household/members.ts`（純
   外れたアカウントは未ログイン扱いにし（このアプリのセッションだけ`scope: "local"`で破棄）、`/login?error=not_allowed`へ戻す。
   `getCurrentUser()`側には判定を足さない（ユーザーのメールはDBの控えで、Supabaseの値とずれうる。
   また、proxyで弾かないと`/login`↔`/`の往復になる）
+- **ログインした利用者のUserは`supabaseUserId`だけで引いて作らない**（#134）。共有のSupabaseで
+  ユーザーが作り直されると同じ本人でもidが変わり、idだけで引くと新しいUserと家庭ができて
+  旧い在庫が「消えた」ように見える（エラーは出ないのでP2002の検知では防げない）。照合は
+  `src/lib/auth/account-link.ts`の`linkStocklyUser()`が「`supabaseUserId` → `googleSubject`
+  （Supabaseの`identities`にあるGoogleの`sub`）」の順に行い、後者で当たればUser.idを保ったまま
+  付け替える。**メール一致だけでは寄せず、何も作らずに`/login?error=account_recovery`へ戻す**。
+  `googleSubject`を`user_metadata`から埋めない（本人が書き換えられる）。
+  人が行う復旧は`pnpm auth:account-links`（読み取り）と`relink`（1人だけの付け替え）。
+  手順は[docs/account-recovery.md](docs/account-recovery.md)
 - 在庫を扱うクエリは`src/lib/household/access.ts`の`scopeToHousehold()`を通す。画面ごとに
   `where: { householdId }`を手で書かない（1か所の書き忘れがそのまま越境になる）
 - ログイン後の戻り先は`resolveInternalPath()`で正規化する（open redirectの防止）
