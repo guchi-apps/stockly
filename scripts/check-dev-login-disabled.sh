@@ -12,6 +12,8 @@
 #   1. POST /api/dev/login が 404（開発用ログインの入口そのものが無い）
 #   2. 開発用ログインのCookieを付けて / を開いても /login へ戻される（Cookieを信用しない）
 #   3. 未ログインで /inventory を開くと /login へ戻される（認証の関門が効いている）
+#   4. 未ログインでも /api/app-version が200で、起動時の APP_COMMIT_SHA を返す
+#      （本番デプロイのヘルスチェックがこれを照合する。#151）
 #
 # 外部サービスには接続しない。Supabaseのプレースホルダー値はDNSに存在しないホストで、
 # セッションCookieが無いリクエストではproxyがSupabaseへ問い合わせない。
@@ -35,6 +37,8 @@ export NEXT_PUBLIC_SUPABASE_URL="${NEXT_PUBLIC_SUPABASE_URL:-https://ci-placehol
 export NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-ci-placeholder}"
 # わざとシークレットを与える。本番ではこれがあっても無効でなければならない。
 export CI_LOGIN_BYPASS_SECRET="smoke-test-secret-must-be-ignored-in-production"
+# 本番では deploy.yml が .env へ書くコミットSHA。ビルド時ではなく起動時の値が返ることを確かめる。
+export APP_COMMIT_SHA="smoke0000000000000000000000000000000000000"
 
 pnpm exec next start -p "$PORT" >"$LOG" 2>&1 &
 SERVER_PID=$!
@@ -80,6 +84,15 @@ check "開発用ログインのCookieは本番では信用されない（/ → /
 
 redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$BASE/inventory")
 check "未ログインの /inventory は /login へ戻る" "307 ${BASE}/login?next=%2Finventory" "$redirect"
+
+status=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/app-version")
+check "未ログインの /api/app-version は200" "200" "$status"
+if curl -s "$BASE/api/app-version" | grep -qF "\"sha\":\"${APP_COMMIT_SHA}\""; then
+  echo "ok   /api/app-version は起動時の APP_COMMIT_SHA を返す"
+else
+  echo "FAIL /api/app-version が APP_COMMIT_SHA=${APP_COMMIT_SHA} を返さない"
+  failures=$((failures + 1))
+fi
 
 if [[ "$failures" -gt 0 ]]; then
   echo "開発用ログインの無効化・認証の関門の確認に失敗しました（${failures}件）。" >&2

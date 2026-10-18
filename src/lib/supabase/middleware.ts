@@ -6,13 +6,7 @@ import { SUPABASE_USER_ID_HEADER } from "@/lib/auth/auth-header";
 import { DEV_LOGIN_COOKIE_NAME, resolveDevLoginUserId } from "@/lib/auth/dev-login";
 import { signOutFromThisApp } from "@/lib/auth/sign-out";
 import { getRequestOrigin } from "@/lib/request-origin";
-
-/** ログインしていなくても通すパス。ここ以外はすべて認証が要る。 */
-const PUBLIC_PATHS = ["/login", "/auth/signin", "/auth/callback", "/api/dev/login"];
-
-function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
-}
+import { isPublicPath } from "@/lib/supabase/public-paths";
 
 /**
  * Supabaseのセッションを更新し、検証済みの利用者を後段へ渡す（`src/proxy.ts`から呼ばれる）。

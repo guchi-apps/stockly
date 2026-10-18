@@ -225,6 +225,13 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   既定vhostを返す。DNSもプロセスも正常に見えるのに中身だけ違うので気付きにくい。
   `echo | openssl s_client -connect stockly.gucchii.com:443 -servername stockly.gucchii.com 2>/dev/null | openssl x509 -noout -subject`
   のCNが別ドメインなら、Stocklyのvhostがまだ無い（#26で実際にops-dashboardが表示されていた）
+- **ヘルスチェックはHTTP 200ではなく稼働版のコミットで判定する**（#151）。`deploy.yml`が
+  `APP_COMMIT_SHA`（`github.sha`）をssh-actionの`env:`と`envs:`で渡し、PM2の起動より前に`.env`へ書き、
+  `127.0.0.1:3116/api/app-version`の`sha`が一致するまでリトライして、時間切れなら失敗にする
+  （旧版が残っていても200は返るため）。`/api/app-version`は`src/lib/supabase/public-paths.ts`で
+  公開パスにしてあり、返すのはバージョンとSHAだけ。issue-deckの新方式リリースは、対象コミットの
+  `deploy.yml`にこの照合があるかで稼働確認の可否を決めるので、**この照合を外さない**
+  （`src/deploy-workflow.test.ts`が配線を確かめる）
 - deployジョブの成功は公開できたことを保証しない。ヘルスチェックが叩くのはVPS内の
   `127.0.0.1:3116`で、ApacheのVirtualHostが無くても通る。公開URLの疎通は後段の警告のみのステップで見る
 
