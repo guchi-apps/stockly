@@ -243,6 +243,8 @@ jobs:
       - name: Deploy and restart
         uses: appleboy/ssh-action@v1
         env:
+          # 稼働している版の照合に使う（#151）。ヘルスチェックが`/api/app-version`の`sha`と突き合わせる。
+          APP_COMMIT_SHA: ${{ github.sha }}
           DATABASE_URL: ${{ env.DATABASE_URL }}
           MIGRATE_DATABASE_URL: ${{ env.MIGRATE_DATABASE_URL }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
@@ -258,7 +260,7 @@ jobs:
           key: ${{ env.SSH_PRIVATE_KEY }}
           port: ${{ env.SSH_PORT }}
           # ここに無い変数はSSH先に存在しない。env: と同じ名前を必ず並べる。
-          envs: DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,NOTION_API_TOKEN,NOTION_SHOPPING_DATABASE_ID,ANTHROPIC_API_KEY,TARGET_DIR
+          envs: APP_COMMIT_SHA,DATABASE_URL,MIGRATE_DATABASE_URL,NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,ALLOWED_GOOGLE_EMAILS,NOTION_API_TOKEN,NOTION_SHOPPING_DATABASE_ID,ANTHROPIC_API_KEY,TARGET_DIR
           script: |
             set -euo pipefail
             cd "${TARGET_DIR}"
@@ -283,6 +285,8 @@ jobs:
             echo "Updating .env..."
             update_env NODE_ENV production
             update_env PORT "$PORT"
+            # 稼働中のコミット。PM2の起動より前に書くので、新しいプロセスはこの値を読む（#151）。
+            update_env APP_COMMIT_SHA "$APP_COMMIT_SHA"
             update_env DATABASE_URL "$DATABASE_URL"
             update_env NEXT_PUBLIC_SUPABASE_URL "$NEXT_PUBLIC_SUPABASE_URL"
             update_env NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"
@@ -314,15 +318,20 @@ jobs:
             echo "Health check..."
             # Next.js は起動完了までに数秒かかる。1回だけのcurlでは起動が間に合わずに
             # 失敗するため、一定時間リトライする。
+            # HTTP 200だけでは成功にしない。旧版のプロセスが残っていても200は返るため、
+            # `/api/app-version`が返す`sha`が今回デプロイしたコミットと一致するまで待つ（#151）。
+            body=""
             for i in $(seq 1 30); do
-              if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/"; then
-                echo "Deployment successful."
+              body="$(curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/api/app-version" 2>/dev/null || true)"
+              if [ -n "$body" ] && printf '%s' "$body" | grep -qF "\"sha\":\"${APP_COMMIT_SHA}\""; then
+                echo "Deployment successful. (sha=${APP_COMMIT_SHA})"
                 exit 0
               fi
               sleep 2
             done
 
-            echo "Health check failed after 60s."
+            echo "Health check failed after 60s: /api/app-version did not report sha=${APP_COMMIT_SHA}."
+            echo "last response: ${body:-<none>}"
             pm2 describe stockly || true
             pm2 logs stockly --lines 50 --nostream || true
             exit 1
