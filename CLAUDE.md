@@ -213,12 +213,22 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
 - **`DATABASE_URL`は持たず、`DB_*`から`scripts/construct-database-url.sh`が組み立てる。**
   パスワードをURLエンコードして埋め込むため、値を丸ごと持つとActionsのログでマスクが効かない
   （このリポジトリはPUBLIC）。`prisma migrate deploy`だけはDDL権限のある`MIGRATE_DATABASE_URL`を使う
-- **VPS上の`.env`は`scripts/update-env-file.sh`が書いたキーだけを更新する。** 実行時に要る値は
-  `deploy.yml`の`update_env`へ必ず並べること。サーバー上で手で足した値は次のデプロイで
-  参照されないまま取り残される
+- **SSH先の処理はVPSのapp-deploy-gate（`guchi-apps/vps`の`scripts/app-deploy-gate.sh`）が行う**
+  （guchi-apps/issue-deck#4759）。`deploy`ジョブは`ssh … upload < deploy.tar.gz` → `… | ssh … env` →
+  `ssh … deploy`の3語しか送らず、旧配布物の削除・展開・`.env`更新・`pnpm install --prod`・
+  `prisma migrate deploy`・PM2の再起動・稼働版の照合はgate側にある。鍵はこのアプリ専用の
+  `SSH_PRIVATE_KEY`（`op://apps/stockly/deploy-ssh-key`）で、VPSの`authorized_keys`の`command=`が
+  gateのアプリ名`stockly`を固定する。置き場は`/home/github-user/apps/stockly`に固定され、
+  `TARGET_DIR`は使わなくなった（マニフェストの行は移行を確かめてから撤去する）。
+  **gateの外の処理（配布物内のスクリプトの実行など）はSSH先で動かせない。** マイグレーション直前に
+  要る処理だけは`deploy/pre-migrate.sh`に置ける
+- **VPS上の`.env`はgateへ`env`で送ったキーだけを更新する。** 実行時に要る値は`deploy.yml`の
+  `Send environment variables`へ必ず並べること（1行1変数のため、改行を含む値は送れずステップが落ちる）。
+  `MIGRATE_DATABASE_URL`は`.env`へ書かれずマイグレーションだけに使われる。サーバー上で手で足した値は
+  次のデプロイで参照されないまま取り残される
 - デプロイに要る値の対応表は`.github/secrets-manifest.tsv`が正。VPS接続・共有MariaDB・Supabaseの
-  公開値はorganizationの共通値を`inherit`し、このリポジトリ固有は`TARGET_DIR`・`DB_NAME`・
-  `ALLOWED_GOOGLE_EMAILS`だけ。**`repo`なのにSOURCEが`-`の行を作らない**（同期が必ず失敗し、
+  公開値はorganizationの共通値を`inherit`し、このリポジトリ固有は`SSH_PRIVATE_KEY`（デプロイ用の鍵）・
+  `DB_NAME`・`ALLOWED_GOOGLE_EMAILS`・Notion・Anthropicの値（`TARGET_DIR`は撤去待ち）。**`repo`なのにSOURCEが`-`の行を作らない**（同期が必ず失敗し、
   値が空のままワークフローだけ通る）
 - **公開URLで別アプリの画面が出たら、まず証明書のCNを見る。** `*.gucchii.com`はワイルドカードで
   VPSへ向いているため、vhostが無いホスト名でもTLSハンドシェイクまで成立し、Apacheが443番の
@@ -226,12 +236,12 @@ Apache（`stockly.gucchii.com`:443） → `127.0.0.1:3116` → PM2プロセス`s
   `echo | openssl s_client -connect stockly.gucchii.com:443 -servername stockly.gucchii.com 2>/dev/null | openssl x509 -noout -subject`
   のCNが別ドメインなら、Stocklyのvhostがまだ無い（#26で実際にops-dashboardが表示されていた）
 - **ヘルスチェックはHTTP 200ではなく稼働版のコミットで判定する**（#151）。`deploy.yml`が
-  `APP_COMMIT_SHA`（`github.sha`）をssh-actionの`env:`と`envs:`で渡し、PM2の起動より前に`.env`へ書き、
-  `127.0.0.1:3116/api/app-version`の`sha`が一致するまでリトライして、時間切れなら失敗にする
-  （旧版が残っていても200は返るため）。`/api/app-version`は`src/lib/supabase/public-paths.ts`で
+  `APP_COMMIT_SHA`（`github.sha`）を`Send environment variables`でgateへ送り、gateがPM2の起動より前に
+  `.env`へ書き、`127.0.0.1:3116/api/app-version`の`sha`が一致するまで最大60秒待って、不一致なら
+  失敗にする（旧版が残っていても200は返るため）。`/api/app-version`は`src/lib/supabase/public-paths.ts`で
   公開パスにしてあり、返すのはバージョンとSHAだけ。issue-deckの新方式リリースは、対象コミットの
-  `deploy.yml`にこの照合があるかで稼働確認の可否を決めるので、**この照合を外さない**
-  （`src/deploy-workflow.test.ts`が配線を確かめる）
+  `deploy.yml`がこの形（`APP_COMMIT_SHA`をgateへ送り`deploy`を呼ぶ）かで稼働確認の可否を決めるので、
+  **この配線を外さない**（`src/deploy-workflow.test.ts`が確かめる）
 - deployジョブの成功は公開できたことを保証しない。ヘルスチェックが叩くのはVPS内の
   `127.0.0.1:3116`で、ApacheのVirtualHostが無くても通る。公開URLの疎通は後段の警告のみのステップで見る
 

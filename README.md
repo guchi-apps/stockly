@@ -110,12 +110,15 @@ rsvg-convert -w 180 -h 180 src/app/icon.svg -o src/app/apple-icon.png
 
 流れは、リリースタグの作成 → ビルド（`pnpm build:ci`） → 成果物をVPSへ転送 → `.env`の更新 →
 `pnpm install --prod` → `prisma migrate deploy` → PM2の再起動 → ヘルスチェック → Signalyへ通知、の順です。
+転送より後の処理はVPSのapp-deploy-gate（`guchi-apps/vps`）が行い、Actionsからはこのアプリ専用の鍵
+（`SSH_PRIVATE_KEY`）で`upload`・`env`・`deploy`の3語だけを送ります。配置先は`/home/github-user/apps/stockly`です。
 `develop`から`main`へのリリースPRは自動マージしない運用のため、公開は人がマージした時点で始まります。
 
 デプロイに要る値は`.github/secrets-manifest.tsv`が正で、1Passwordを人が管理する唯一の正、
 GitHub Secrets/VariablesをActions実行時の取得先とします。VPSへの接続情報・共有MariaDBの
 接続情報・Supabaseの公開値はorganizationの共通値を継承し、このリポジトリ固有の値は
-`TARGET_DIR`・`DB_NAME`・`ALLOWED_GOOGLE_EMAILS`の3つだけです。値を変えたときは
+デプロイ用の鍵（`SSH_PRIVATE_KEY`）・`DB_NAME`・`ALLOWED_GOOGLE_EMAILS`と、Notion・Anthropicの値です
+（`TARGET_DIR`はgateへの移行後に撤去します）。値を変えたときは
 issue-deckの画面（設定 → シークレットの同期）か`sync-secrets.yml`で同期します。
 
 待受ポート（3116）は1Passwordにもマニフェストにも置かず、`deploy.yml`に平文で持ちます。
