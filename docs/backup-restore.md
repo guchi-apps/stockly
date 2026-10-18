@@ -56,21 +56,21 @@ mysqldump app_stockly | gzip > /tmp/app_stockly-before-restore-$(date +%Y%m%d%H%
 mysql app_stockly < /tmp/app_stockly-YYYYMMDD.sql
 
 # 5. スキーマをコードに合わせる（バックアップ以後にマイグレーションが入っていれば適用される）
-cd <TARGET_DIR> && DATABASE_URL="$MIGRATE_DATABASE_URL" pnpm exec prisma migrate deploy
+cd /home/github-user/apps/stockly && DATABASE_URL="$MIGRATE_DATABASE_URL" pnpm exec prisma migrate deploy
 
 # 6. 起動して確認
 pm2 start stockly
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3116/login   # 200
 ```
 
-`TARGET_DIR`と`MIGRATE_DATABASE_URL`はデプロイが`.env`へ書いた値（[CLAUDE.md](../CLAUDE.md)「本番デプロイ」）。
+配置先はapp-deploy-gateが固定する`/home/github-user/apps/stockly`。`MIGRATE_DATABASE_URL`は`.env`に書かれない（gateがマイグレーションの間だけ使う）ので、DDL権限のあるユーザーの接続文字列をその場で用意する（[CLAUDE.md](../CLAUDE.md)「本番デプロイ」）。
 
 ## 3. 復元後の確認（必ず行う）
 
 戻ったかどうかは、画面が開くことではなく**数量が履歴と合っているか**で判定する。
 
 ```bash
-cd <TARGET_DIR>
+cd /home/github-user/apps/stockly
 pnpm db:rebuild-quantities            # dry-run。ずれが0件なら終了コード0
 ```
 
