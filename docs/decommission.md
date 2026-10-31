@@ -40,7 +40,18 @@
 - **Notionのインテグレーション（`NOTION_API_TOKEN`）はStockly専用。** GitHub Secretを消すだけでは
   トークン自体は有効なまま残るので、Notionの「インテグレーション」画面から削除（失効）する
 - **Supabaseに消すものは無い。** プロジェクトは他アプリと共有で、Redirect URLsはワイルドカード登録
-- 期限通知のcronは一度も登録していないため、止めるものは無い
+- 期限通知のcronは一度も登録していないため、止めるものは無い（`guchi-apps/vps`の`cron/crontab.txt`にstocklyの行が無いことを2026-10-31に確認）
+
+## 停止後のGitHub Actionsの扱い
+
+本番へ届く経路は`deploy.yml`だけなので、止めるのはそれだけにした。残りはアーカイブで一斉に止まる。
+
+| ワークフロー | 扱い | 理由 |
+|---|---|---|
+| `deploy.yml` | `on:`を`workflow_call:`だけにした | **ファイルも`on:`も消さない。** `push: main`だけを外すとissue-deckが配送漏れとみなして`workflow_dispatch`で起動し直す（残っていれば本番へ配られる）。`workflow_dispatch`も無ければ再起動は422になり、issue-deckは「起動できないリポジトリ」として静かに畳む。ファイルごと消すとこの静かな経路から外れる。`src/deploy-workflow.test.ts`がこの形を確かめる |
+| `deploy-retry.yml` | そのまま | `deploy.yml`の完了でしか起動しないので、もう発火しない（issue-deckの`docs/app-shutdown.md`も個別に止めなくてよいとしている） |
+| `release-develop-to-main.yml`・`version-tag-check.yml` | そのまま | 起動は`develop`への`package.json`のpush・手動・main宛PRだけ。リリースPRが作られてmainへ入っても`deploy.yml`が起動しないため本番へは届かない（タグとReleaseも作られない） |
+| `claude-*`（dispatch・CI修復・レビュー等） | そのまま | 運用終了後に残るIssueは撤去の手作業と台帳の消し込みだけ。アーカイブで止まる |
 
 ## 撤去の順序
 
