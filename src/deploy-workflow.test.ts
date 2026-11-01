@@ -42,3 +42,10 @@ test("SSH先で任意のスクリプトを実行しない（gateの3語だけ）
   assert.ok(!workflow.includes("appleboy/ssh-action"), "ssh-actionが残っている");
   assert.ok(!workflow.includes("secrets.SERVER_SSH_PRIVATE_KEY"), "organization共通の鍵を使っている");
 });
+
+test("運用終了のため、起動できるトリガーはworkflow_callだけ（#158）", () => {
+  // push: mainやworkflow_dispatchを戻すと、アーカイブまでの間に本番へ配られる。
+  const on = workflow.match(/^on:\n((?: {2}.*\n)+)/m);
+  assert.ok(on, "on: が見つからない");
+  assert.equal(on[1].trim(), "workflow_call:");
+});
