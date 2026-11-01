@@ -6,11 +6,13 @@ name: Deploy to Production
 # **version-tag-check.ymlがこのファイルのtagジョブを前提にしている。** main宛PRの時点で
 # package.jsonのversionに対応するタグが無いことを確かめており、ここでのタグ作成が唯一の
 # タグ発行経路。ジョブを消すとリリースタグとGitHub Releaseが作られなくなる。
+#
+# **運用終了のため本番デプロイを止めている（#158）。** 起動できるトリガーを外し`workflow_call`だけを
+# 残す。`push: main`だけを外すとissue-deckがイベント配送漏れとみなして`workflow_dispatch`で起動し直し、
+# ファイルごと消すとその再起動が422で静かに畳まれる経路から外れるため、この形にする
+# （guchi-apps/issue-deck の docs/app-shutdown.md「本番デプロイを止める」）。撤去手順は docs/decommission.md。
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: deploy-stockly-production
